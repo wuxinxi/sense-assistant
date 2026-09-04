@@ -5,35 +5,29 @@ import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import cn.xxstudy.assistant.ui.components.ChatBubble
+import cn.xxstudy.assistant.ui.components.DoubaoInputBar
+import cn.xxstudy.assistant.ui.components.DoubaoVoicePanel
 import cn.xxstudy.assistant.viewmodel.MainViewModel
+import java.io.File
 
 @Composable
 fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
@@ -44,23 +38,45 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val chatMessages by viewModel.chatMessages.collectAsState()
     val speakingMessageId by viewModel.speakingMessageId.collectAsState()
 
-    val isListening by viewModel.speechManager.isListening.collectAsState()
+    val listeningRms by viewModel.listeningRms.collectAsState()
     val voicePartialText by viewModel.voicePartialText.collectAsState()
 
     val listState = rememberLazyListState()
 
     var inputText by remember { mutableStateOf("") }
+    var isPressingVoice by remember { mutableStateOf(false) }
+    var isCancelVoice by remember { mutableStateOf(false) }
+
+    val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val cancelThresholdPx = remember(density) { with(density) { 60.dp.toPx() } }
+
+    // 自动探测并预热本地大模型引擎
+    LaunchedEffect(Unit) {
+        if (!isModelLoaded && !isLoading) {
+            val internalFile = File(context.filesDir, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            val externalFile = File(context.getExternalFilesDir(null), "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            val sdcardFile = File("/sdcard/Android/data/cn.xxstudy.assistant/files/qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            val targetPath = when {
+                internalFile.exists() -> internalFile.absolutePath
+                externalFile.exists() -> externalFile.absolutePath
+                sdcardFile.exists() -> sdcardFile.absolutePath
+                else -> null
+            }
+            if (targetPath != null) {
+                viewModel.loadLocalModel(targetPath)
+            }
+        }
+    }
 
     // 录音权限请求器
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            viewModel.startVoiceRecording { recognized ->
-                inputText = recognized
-            }
+            Toast.makeText(context, "已授予麦克风权限，可按住说话", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(context, "请授予麦克风权限以使用语音输入", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "请授予麦克风权限以使用语音功能", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -84,197 +100,156 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // 顶部状态栏
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Column(
+            modifier = Modifier.fillMaxSize()
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(12.dp)
-                        .clip(CircleShape)
-                        .background(if (isModelLoaded) Color(0xFF4CAF50) else Color(0xFFFF9800))
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "系统状态: $statusMessage", color = MaterialTheme.colorScheme.onBackground)
-            }
-
-            if (!isModelLoaded) {
-                Button(
-                    onClick = {
-                        val internalFile = java.io.File(context.filesDir, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
-                        val externalFile = java.io.File(context.getExternalFilesDir(null), "qwen2.5-0.5b-instruct-q4_k_m.gguf")
-                        val targetPath = when {
-                            internalFile.exists() -> internalFile.absolutePath
-                            externalFile.exists() -> externalFile.absolutePath
-                            else -> "/sdcard/Android/data/cn.xxstudy.assistant/files/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-                        }
-                        viewModel.loadLocalModel(targetPath)
-                    },
-                    enabled = !isLoading
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text("启动引擎")
-                }
-            }
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-
-        // 对话流区域
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            items(chatMessages, key = { it.id }) { msg ->
-                ChatBubble(
-                    msg = msg,
-                    isSpeakingThis = (speakingMessageId == msg.id),
-                    onSpeakClick = { viewModel.speakMessage(msg.id, msg.text) }
-                )
-            }
-        }
-
-        // 语音输入正在聆听动态浮条
-        AnimatedVisibility(
-            visible = isListening,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Surface(
+            // 顶部状态栏
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(16.dp),
-                tonalElevation = 4.dp
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = if (!voicePartialText.isNullOrBlank()) "正在聆听: \"$voicePartialText\"" else "正在聆听语音输入...",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            maxLines = 1
-                        )
-                    }
-                    TextButton(onClick = { viewModel.stopVoiceRecording() }) {
-                        Text("完成", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        // 底部输入栏
-        if (isModelLoaded) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .imePadding()
-                    .navigationBarsPadding(),
-                color = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
-                tonalElevation = 4.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("输入消息或点击语音...") },
-                        shape = RoundedCornerShape(24.dp),
-                        singleLine = true
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(if (isModelLoaded) Color(0xFF4CAF50) else Color(0xFFFF9800))
                     )
-
                     Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "系统状态: $statusMessage",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                }
 
-                    // ASR 语音输入按钮
-                    FilledIconButton(
+                if (!isModelLoaded) {
+                    Button(
                         onClick = {
-                            if (isListening) {
-                                viewModel.stopVoiceRecording()
-                            } else {
-                                val hasPermission = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.RECORD_AUDIO
-                                ) == PackageManager.PERMISSION_GRANTED
-
-                                if (hasPermission) {
-                                    viewModel.startVoiceRecording { recognized ->
-                                        inputText = recognized
-                                    }
-                                } else {
-                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
+                            val internalFile = File(context.filesDir, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+                            val externalFile = File(context.getExternalFilesDir(null), "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+                            val targetPath = when {
+                                internalFile.exists() -> internalFile.absolutePath
+                                externalFile.exists() -> externalFile.absolutePath
+                                else -> "/sdcard/Android/data/cn.xxstudy.assistant/files/qwen2.5-0.5b-instruct-q4_k_m.gguf"
                             }
+                            viewModel.loadLocalModel(targetPath)
                         },
-                        modifier = Modifier.size(46.dp),
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondaryContainer,
-                            contentColor = if (isListening) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSecondaryContainer
-                        )
+                        enabled = !isLoading,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                     ) {
-                        Icon(
-                            imageVector = if (isListening) Icons.Default.Stop else Icons.Default.Mic,
-                            contentDescription = if (isListening) "停止录音" else "语音输入",
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // 发送按钮
-                    FloatingActionButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
-                                viewModel.sendMessage(inputText)
-                                inputText = ""
-                            }
-                        },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        shape = CircleShape,
-                        modifier = Modifier.size(46.dp)
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
+                        if (isLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), color = Color.White, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Text("启动引擎", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+
+            // 对话流区域
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                items(chatMessages, key = { it.id }) { msg ->
+                    ChatBubble(
+                        msg = msg,
+                        isSpeakingThis = (speakingMessageId == msg.id),
+                        onSpeakClick = { viewModel.speakMessage(msg.id, msg.text) }
+                    )
+                }
+            }
+
+            // 豆包一体化白色胶囊输入栏 (始终优雅常驻底部)
+            DoubaoInputBar(
+                inputText = inputText,
+                onInputTextChange = { inputText = it },
+                onCameraClick = {
+                    Toast.makeText(context, "拍照功能暂未开放", Toast.LENGTH_SHORT).show()
+                },
+                onPlusClick = {
+                    Toast.makeText(context, "更多功能暂未开放", Toast.LENGTH_SHORT).show()
+                },
+                onSendClick = {
+                    if (!isModelLoaded) {
+                        Toast.makeText(context, "大模型引擎加载中，请稍候...", Toast.LENGTH_SHORT).show()
+                        return@DoubaoInputBar
+                    }
+                    if (inputText.isNotBlank()) {
+                        viewModel.sendMessage(inputText)
+                        inputText = ""
+                    }
+                },
+                isPressingVoice = isPressingVoice,
+                onVoiceDown = {
+                    val hasPermission = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+
+                    if (!hasPermission) {
+                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        return@DoubaoInputBar
+                    }
+
+                    isPressingVoice = true
+                    isCancelVoice = false
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+
+                    viewModel.startVoiceRecording(
+                        autoSend = true,
+                        onError = { errMsg ->
+                            Toast.makeText(context, errMsg, Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                },
+                onVoiceMove = { deltaY ->
+                    val nowCancel = deltaY < -cancelThresholdPx
+                    if (nowCancel != isCancelVoice) {
+                        isCancelVoice = nowCancel
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
+                },
+                onVoiceUp = {
+                    if (isPressingVoice) {
+                        isPressingVoice = false
+                        if (isCancelVoice) {
+                            viewModel.cancelVoiceRecording()
+                            Toast.makeText(context, "已取消发送", Toast.LENGTH_SHORT).show()
+                        } else {
+                            viewModel.stopVoiceRecording()
+                        }
+                        isCancelVoice = false
+                    }
+                },
+                modifier = Modifier
+                    .imePadding()
+                    .navigationBarsPadding()
+            )
         }
+
+        // 豆包沉浸式科技蓝声浪面板 (按住说话时由底部升起展开)
+        DoubaoVoicePanel(
+            visible = isPressingVoice,
+            isCancel = isCancelVoice,
+            rms = listeningRms,
+            partialText = voicePartialText,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 }

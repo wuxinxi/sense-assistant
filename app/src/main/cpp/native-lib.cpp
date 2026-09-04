@@ -1,5 +1,9 @@
 #include <jni.h>
 #include <string>
+#include <vector>
+#include <chrono>
+#include <atomic>
+#include <mutex>
 #include "llama.h"
 #include <android/log.h>
 
@@ -11,9 +15,21 @@
 llama_model *g_model = nullptr;
 llama_context *g_ctx = nullptr;
 
+// 线程安全与打断控制
+std::mutex g_ctx_mutex;
+std::atomic<bool> g_should_stop{false};
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_cn_xxstudy_assistant_engine_LlamaEngine_stopGeneration(JNIEnv *env, jobject thiz) {
+    LOGI("LlamaEngine_stopGeneration called -> setting g_should_stop = true");
+    g_should_stop.store(true);
+}
+
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path) {
+    std::lock_guard<std::mutex> lock(g_ctx_mutex);
     if (g_model != nullptr) return JNI_TRUE; // Already loaded
 
     const char *path = env->GetStringUTFChars(model_path, nullptr);
@@ -44,13 +60,16 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject th
     return JNI_TRUE;
 }
 
-#include <vector>
-#include <chrono>
-
-// 这是一个简化的推理接口，用于快速打通 MVP 验证。
+// 统一受互斥锁保护并支持即时打断的推理接口
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject thiz, jstring prompt, jobject callback) {
+    // 互斥锁保护：确保同一时刻只有一个线程操作 g_ctx，彻底避免多线程并发 SIGSEGV
+    std::lock_guard<std::mutex> lock(g_ctx_mutex);
+
+    // 重置打断标志
+    g_should_stop.store(false);
+
     if (g_model == nullptr || g_ctx == nullptr) {
         return env->NewStringUTF("Error: Model not initialized.");
     }
@@ -101,6 +120,12 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     int generated_tokens = 0;
     
     for (int i = 0; i < max_predict; i++) {
+        // 核心检测：检查是否收到上层打断请求
+        if (g_should_stop.load()) {
+            LOGI("Generation interrupted by user request at token %d.", i);
+            break;
+        }
+
         // 采样预测下一个 token
         llama_token id = llama_sampler_sample(smpl, g_ctx, -1);
         llama_sampler_accept(smpl, id);

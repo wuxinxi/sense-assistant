@@ -27,6 +27,11 @@ class LlamaEngine {
      * 简单的非流式对话推理生成接口
      */
     external fun generateText(prompt: String, callback: LlamaCallback): String
+
+    /**
+     * 主动打断当前正在进行的推理任务
+     */
+    external fun stopGeneration()
 }
 
 interface LlamaCallback {

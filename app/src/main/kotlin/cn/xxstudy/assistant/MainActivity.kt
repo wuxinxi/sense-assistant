@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
                         AppNavScreen.SETTINGS -> {
                             SettingsScreen(
                                 speechManager = viewModel.speechManager,
+                                onClearChatHistory = { viewModel.clearChatHistory() },
                                 onBack = { currentScreen = AppNavScreen.CHAT }
                             )
                         }

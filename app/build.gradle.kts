@@ -55,6 +55,9 @@ android {
 }
 
 dependencies {
+    // 本地原生预编译 AAR / JAR 依赖 (如 sherpa-onnx 离线语音识别底座)
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

@@ -1,13 +1,8 @@
 package cn.xxstudy.assistant.speech
 
 import android.content.Context
-import android.content.Intent
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
@@ -16,6 +11,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
+/**
+ * [SpeechManager]
+ * 语音调度中枢：
+ * 1. ASR（语音识别）：由底层的 [SenseVoiceAsrEngine] 纯端侧离线驱动，彻底摆脱系统 SpeechRecognizer 限制。
+ * 2. TTS（语音播报）：目前由 TextToSpeech 驱动，预留无缝升级至 MOSS-TTS。
+ */
 class SpeechManager(private val context: Context) {
 
     companion object {
@@ -24,17 +25,11 @@ class SpeechManager(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // --- ASR 状态 ---
-    private var speechRecognizer: SpeechRecognizer? = null
-    private val _isListening = MutableStateFlow(false)
-    val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
+    // --- 端侧离线 ASR 引擎 ---
+    private val asrEngine = SenseVoiceAsrEngine(context)
 
-    private val _listeningRms = MutableStateFlow(0f)
-    val listeningRms: StateFlow<Float> = _listeningRms.asStateFlow()
-
-    private var onPartialResultCallback: ((String) -> Unit)? = null
-    private var onFinalResultCallback: ((String) -> Unit)? = null
-    private var onErrorCallback: ((String) -> Unit)? = null
+    val isListening: StateFlow<Boolean> = asrEngine.isListening
+    val listeningRms: StateFlow<Float> = asrEngine.listeningRms
 
     // --- TTS 状态 ---
     private var tts: TextToSpeech? = null
@@ -96,120 +91,29 @@ class SpeechManager(private val context: Context) {
     }
 
     // ==========================================
-    // ASR 语音转文字逻辑
+    // 端侧 SenseVoice ASR 语音转文字逻辑
     // ==========================================
 
     fun startListening(
         language: String = "zh-CN",
-        onPartial: (String) -> Unit,
+        onPartial: (String) -> Unit = {},
         onFinal: (String) -> Unit,
         onError: (String) -> Unit
     ) {
-        mainHandler.post {
-            if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-                onError("系统无可用语音识别服务，请安装或开启语音引擎")
-                return@post
-            }
-
-            stopListening()
-
-            onPartialResultCallback = onPartial
-            onFinalResultCallback = onFinal
-            onErrorCallback = onError
-
-            try {
-                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
-                    setRecognitionListener(object : RecognitionListener {
-                        override fun onReadyForSpeech(params: Bundle?) {
-                            _isListening.value = true
-                        }
-
-                        override fun onBeginningOfSpeech() {}
-
-                        override fun onRmsChanged(rmsdB: Float) {
-                            _listeningRms.value = rmsdB
-                        }
-
-                        override fun onBufferReceived(buffer: ByteArray?) {}
-
-                        override fun onEndOfSpeech() {
-                            _isListening.value = false
-                        }
-
-                        override fun onError(error: Int) {
-                            _isListening.value = false
-                            _listeningRms.value = 0f
-                            val errorMsg = when (error) {
-                                SpeechRecognizer.ERROR_AUDIO -> "音频录制错误"
-                                SpeechRecognizer.ERROR_CLIENT -> "客户端内部错误"
-                                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "缺少麦克风录音权限"
-                                SpeechRecognizer.ERROR_NETWORK -> "网络连接异常"
-                                SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "网络超时"
-                                SpeechRecognizer.ERROR_NO_MATCH -> "未识别到清晰语音"
-                                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "语音识别器正忙"
-                                SpeechRecognizer.ERROR_SERVER -> "服务端错误"
-                                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "长时间未检测到说话"
-                                else -> "识别错误 (Code $error)"
-                            }
-                            Log.w(TAG, "Speech recognition error: $errorMsg")
-                            onErrorCallback?.invoke(errorMsg)
-                        }
-
-                        override fun onResults(results: Bundle?) {
-                            _isListening.value = false
-                            _listeningRms.value = 0f
-                            val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                            val text = matches?.firstOrNull() ?: ""
-                            if (text.isNotEmpty()) {
-                                onFinalResultCallback?.invoke(text)
-                            } else {
-                                onErrorCallback?.invoke("未识别到有效内容")
-                            }
-                        }
-
-                        override fun onPartialResults(partialResults: Bundle?) {
-                            val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                            matches?.firstOrNull()?.let { partialText ->
-                                if (partialText.isNotEmpty()) {
-                                    onPartialResultCallback?.invoke(partialText)
-                                }
-                            }
-                        }
-
-                        override fun onEvent(eventType: Int, params: Bundle?) {}
-                    })
-                }
-
-                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
-                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                }
-
-                speechRecognizer?.startListening(intent)
-                _isListening.value = true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to start speech recognizer", e)
-                _isListening.value = false
-                onError("启动语音识别失败: ${e.message}")
-            }
-        }
+        asrEngine.startListening(
+            language = language,
+            onPartial = onPartial,
+            onFinal = onFinal,
+            onError = onError
+        )
     }
 
     fun stopListening() {
-        mainHandler.post {
-            try {
-                speechRecognizer?.stopListening()
-                speechRecognizer?.destroy()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error stopping recognizer", e)
-            } finally {
-                speechRecognizer = null
-                _isListening.value = false
-                _listeningRms.value = 0f
-            }
-        }
+        asrEngine.stopListening()
+    }
+
+    fun cancelListening() {
+        asrEngine.cancelListening()
     }
 
     // ==========================================
@@ -228,7 +132,7 @@ class SpeechManager(private val context: Context) {
             return
         }
 
-        // 清洗掉模型可能返回的标记（如 <|im_end|> 或性能指标信息）
+        // 清洗掉模型可能返回的标记（如 <|im_end|> 等）
         val cleanText = text.replace(Regex("<\\|.*?\\|>"), "").trim()
         if (cleanText.isEmpty()) return
 
@@ -249,7 +153,7 @@ class SpeechManager(private val context: Context) {
     }
 
     fun destroy() {
-        stopListening()
+        asrEngine.destroy()
         stopSpeaking()
         tts?.shutdown()
         tts = null

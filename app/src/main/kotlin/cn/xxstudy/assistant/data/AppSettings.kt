@@ -30,6 +30,8 @@ object AppSettings {
     private const val KEY_TTS_AUTO_PLAY = "key_tts_auto_play"
     private const val KEY_TTS_SPEECH_RATE = "key_tts_speech_rate"
     private const val KEY_TTS_PITCH = "key_tts_pitch"
+    private const val KEY_HAPTIC_ENABLED = "key_haptic_enabled"
+    private const val KEY_LOCAL_SERVER_ENABLED = "key_local_server_enabled"
 
     private lateinit var prefs: SharedPreferences
 
@@ -55,6 +57,12 @@ object AppSettings {
     private val _ttsPitch = MutableStateFlow(1.0f)
     val ttsPitch: StateFlow<Float> = _ttsPitch.asStateFlow()
 
+    private val _hapticEnabled = MutableStateFlow(true)
+    val hapticEnabled: StateFlow<Boolean> = _hapticEnabled.asStateFlow()
+
+    private val _localServerEnabled = MutableStateFlow(true)
+    val localServerEnabled: StateFlow<Boolean> = _localServerEnabled.asStateFlow()
+
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -70,6 +78,9 @@ object AppSettings {
         _ttsAutoPlay.value = prefs.getBoolean(KEY_TTS_AUTO_PLAY, false)
         _ttsSpeechRate.value = prefs.getFloat(KEY_TTS_SPEECH_RATE, 1.0f)
         _ttsPitch.value = prefs.getFloat(KEY_TTS_PITCH, 1.0f)
+
+        _hapticEnabled.value = prefs.getBoolean(KEY_HAPTIC_ENABLED, true)
+        _localServerEnabled.value = prefs.getBoolean(KEY_LOCAL_SERVER_ENABLED, true)
     }
 
     fun setThemeMode(mode: ThemeMode) {
@@ -105,5 +116,15 @@ object AppSettings {
     fun setTtsPitch(pitch: Float) {
         _ttsPitch.value = pitch
         prefs.edit().putFloat(KEY_TTS_PITCH, pitch).apply()
+    }
+
+    fun setHapticEnabled(enabled: Boolean) {
+        _hapticEnabled.value = enabled
+        prefs.edit().putBoolean(KEY_HAPTIC_ENABLED, enabled).apply()
+    }
+
+    fun setLocalServerEnabled(enabled: Boolean) {
+        _localServerEnabled.value = enabled
+        prefs.edit().putBoolean(KEY_LOCAL_SERVER_ENABLED, enabled).apply()
     }
 }

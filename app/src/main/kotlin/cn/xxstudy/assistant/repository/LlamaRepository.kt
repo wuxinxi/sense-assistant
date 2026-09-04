@@ -20,7 +20,6 @@ class LlamaRepository {
      * @return 是否成功装载进内存
      */
     suspend fun loadModel(modelPath: String): Boolean {
-        // withContext 确保这个耗时的 C++ 方法跑在后台线程
         return withContext(Dispatchers.IO) {
             try {
                 engine.initContext(modelPath)
@@ -46,6 +45,17 @@ class LlamaRepository {
                 e.printStackTrace()
                 "底层引擎错误: ${e.message}"
             }
+        }
+    }
+
+    /**
+     * 主动打断当前推理
+     */
+    fun stopGeneration() {
+        try {
+            engine.stopGeneration()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }

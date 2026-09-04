@@ -77,22 +77,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // 当前正在进行的推理协程与消息 ID (支持即时打断)
+    private var currentGenerationJob: kotlinx.coroutines.Job? = null
+    private var currentThinkingId: Int? = null
+
     fun sendMessage(prompt: String) {
         if (!_isModelLoaded.value || prompt.isBlank()) return
+
+        // 1. 如果上一轮模型还在推理输出，立即打断 C++ 循环并取消旧协程
+        if (currentGenerationJob?.isActive == true) {
+            repository.stopGeneration()
+            currentGenerationJob?.cancel()
+            // 将上一条被打断的 AI 消息封口（停止转圈动效）
+            currentThinkingId?.let { oldId ->
+                val list = _chatMessages.value.map {
+                    if (it.id == oldId && it.isThinking) {
+                        val finalMsg = if (it.text == "...") "（已打断）" else it.text
+                        it.copy(text = finalMsg, isThinking = false)
+                    } else it
+                }
+                _chatMessages.value = list
+            }
+        }
 
         // 停止之前的朗读
         speechManager.stopSpeaking()
         _speakingMessageId.value = null
 
-        // 1. 插入用户消息
+        // 2. 插入用户消息
         val userMsg = ChatMessage(messageCounter++, true, prompt)
-        // 2. 插入 AI "思考中" 占位
+        // 3. 插入新 AI "思考中" 占位
         val thinkingId = messageCounter++
+        currentThinkingId = thinkingId
         val thinkingMsg = ChatMessage(thinkingId, false, "...", isThinking = true)
 
         _chatMessages.value = _chatMessages.value + listOf(userMsg, thinkingMsg)
 
-        viewModelScope.launch {
+        currentGenerationJob = viewModelScope.launch {
             var currentResponse = ""
 
             // 使用无界 Channel 将 C++ 的回调与 UI 渲染彻底解耦，防止 UI 渲染过慢反向阻塞 JNI 推理线程
@@ -117,33 +138,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // 调用带有回调的推理方法
-            val rawResponse = repository.generateText(prompt) { token ->
-                channel.trySend(token)
-            }
+            try {
+                // 调用带有打断检测的推理方法
+                val rawResponse = repository.generateText(prompt) { token ->
+                    channel.trySend(token)
+                }
 
-            // 推理结束，关闭 channel 并等待 UI 刷新完最后一批字符
-            channel.close()
-            uiUpdaterJob.join()
+                // 推理结束，关闭 channel 并等待 UI 刷新完最后一批字符
+                channel.close()
+                uiUpdaterJob.join()
 
-            // 推理完成后，附加上最终的性能指标
-            val parts = rawResponse.split("<|metrics|>")
-            val actualText = parts[0]
-            val metricsInfo = if (parts.size > 1) {
-                try {
-                    val j = org.json.JSONObject(parts[1])
-                    "首字: ${j.optLong("ttft_ms")} ms | 耗时: ${j.optLong("total_ms")} ms | 速度: ${j.optDouble("speed")} tk/s"
-                } catch(e: Exception) { parts[1] }
-            } else null
+                // 推理完成后，附加上最终的性能指标
+                val parts = rawResponse.split("<|metrics|>")
+                val actualText = if (parts[0].isNotBlank()) parts[0] else currentResponse
+                val metricsInfo = if (parts.size > 1) {
+                    try {
+                        val j = org.json.JSONObject(parts[1])
+                        "首字: ${j.optLong("ttft_ms")} ms | 耗时: ${j.optLong("total_ms")} ms | 速度: ${j.optDouble("speed")} tk/s"
+                    } catch(e: Exception) { parts[1] }
+                } else null
 
-            val finalUpdatedList = _chatMessages.value.map {
-                if (it.id == thinkingId) it.copy(text = actualText, isThinking = false, metrics = metricsInfo) else it
-            }
-            _chatMessages.value = finalUpdatedList
+                val finalUpdatedList = _chatMessages.value.map {
+                    if (it.id == thinkingId) it.copy(text = actualText, isThinking = false, metrics = metricsInfo) else it
+                }
+                _chatMessages.value = finalUpdatedList
 
-            // 检查设置：如果开启了自动朗读，且当前非空，则自动调用 TTS 播报
-            if (AppSettings.ttsAutoPlay.value && actualText.isNotBlank()) {
-                speakMessage(thinkingId, actualText)
+                // 检查设置：如果开启了自动朗读，且当前非空，则自动调用 TTS 播报
+                if (AppSettings.ttsAutoPlay.value && actualText.isNotBlank()) {
+                    speakMessage(thinkingId, actualText)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 收到新消息打断时，安全退出
+                channel.close()
+                uiUpdaterJob.cancel()
+            } finally {
+                if (currentThinkingId == thinkingId) {
+                    currentThinkingId = null
+                }
             }
         }
     }
@@ -172,11 +203,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // 麦克风实时输入音量分贝 (供 HUD 波动动效)
+    val listeningRms: StateFlow<Float> = speechManager.listeningRms
+
     // ==========================================
     // ASR 语音输入控制
     // ==========================================
 
-    fun startVoiceRecording(onFinalTextReady: (String) -> Unit) {
+    fun startVoiceRecording(
+        autoSend: Boolean = true,
+        onFinalTextReady: (String) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
         _voicePartialText.value = null
         val language = AppSettings.asrLanguage.value
         speechManager.startListening(
@@ -187,12 +225,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             onFinal = { finalResult ->
                 _voicePartialText.value = null
                 onFinalTextReady(finalResult)
-                if (AppSettings.asrAutoSend.value && finalResult.isNotBlank()) {
+                // 如果开启了自动发送或者当前为按住发送模式且识别内容非空，则直接发送
+                if ((autoSend || AppSettings.asrAutoSend.value) && finalResult.isNotBlank()) {
                     sendMessage(finalResult)
                 }
             },
-            onError = { _ ->
+            onError = { err ->
                 _voicePartialText.value = null
+                onError(err)
             }
         )
     }
@@ -200,6 +240,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopVoiceRecording() {
         speechManager.stopListening()
         _voicePartialText.value = null
+    }
+
+    fun cancelVoiceRecording() {
+        speechManager.cancelListening()
+        _voicePartialText.value = null
+    }
+
+    fun clearChatHistory() {
+        speechManager.stopSpeaking()
+        _speakingMessageId.value = null
+        currentGenerationJob?.cancel()
+        currentThinkingId = null
+        repository.stopGeneration()
+        _chatMessages.value = listOf(
+            ChatMessage(messageCounter++, false, "上下文已重置。我是部署在您本地终端的 AI，所有交互在端侧封闭运行。")
+        )
     }
 
     override fun onCleared() {

@@ -4,15 +4,8 @@
 
     <!-- 允许 App 在本地绑定端口开启 HTTP 服务器，或被外部访问 -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- 允许麦克风录音用于 ASR 语音转文字 -->
+    <!-- 允许麦克风录音用于端侧 SenseVoice 离线 ASR 语音转文字 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-
-    <!-- 适配 Android 11+ 包可见性，确保可以唤起系统内置语音识别服务 -->
-    <queries>
-        <intent>
-            <action android:name="android.speech.RecognitionService" />
-        </intent>
-    </queries>
 
     <application
         android:allowBackup="true"
