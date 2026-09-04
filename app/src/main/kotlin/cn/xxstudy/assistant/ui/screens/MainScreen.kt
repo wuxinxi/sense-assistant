@@ -1,5 +1,15 @@
 package cn.xxstudy.assistant.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -9,26 +19,52 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import cn.xxstudy.assistant.ui.components.ChatBubble
 import cn.xxstudy.assistant.viewmodel.MainViewModel
 
 @Composable
 fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     val isModelLoaded by viewModel.isModelLoaded.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val statusMessage by viewModel.statusMessage.collectAsState()
     val chatMessages by viewModel.chatMessages.collectAsState()
+    val speakingMessageId by viewModel.speakingMessageId.collectAsState()
+
+    val isListening by viewModel.speechManager.isListening.collectAsState()
+    val voicePartialText by viewModel.voicePartialText.collectAsState()
 
     val listState = rememberLazyListState()
 
-    // 智能判断用户当前是否正停留在列表底部附近（如果在最底部才自动跟随，向上翻看历史时绝不打断）
+    var inputText by remember { mutableStateOf("") }
+
+    // 录音权限请求器
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.startVoiceRecording { recognized ->
+                inputText = recognized
+            }
+        } else {
+            Toast.makeText(context, "请授予麦克风权限以使用语音输入", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 智能判断用户当前是否停留在列表底部附近
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
@@ -71,11 +107,10 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(text = "系统状态: $statusMessage", color = MaterialTheme.colorScheme.onBackground)
             }
-            
-            val context = androidx.compose.ui.platform.LocalContext.current
+
             if (!isModelLoaded) {
                 Button(
-                    onClick = { 
+                    onClick = {
                         val internalFile = java.io.File(context.filesDir, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
                         val externalFile = java.io.File(context.getExternalFilesDir(null), "qwen2.5-0.5b-instruct-q4_k_m.gguf")
                         val targetPath = when {
@@ -83,7 +118,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             externalFile.exists() -> externalFile.absolutePath
                             else -> "/sdcard/Android/data/cn.xxstudy.assistant/files/qwen2.5-0.5b-instruct-q4_k_m.gguf"
                         }
-                        viewModel.loadLocalModel(targetPath) 
+                        viewModel.loadLocalModel(targetPath)
                     },
                     enabled = !isLoading
                 ) {
@@ -95,7 +130,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 }
             }
         }
-        
+
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
 
         // 对话流区域
@@ -108,13 +143,62 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             items(chatMessages, key = { it.id }) { msg ->
-                ChatBubble(msg)
+                ChatBubble(
+                    msg = msg,
+                    isSpeakingThis = (speakingMessageId == msg.id),
+                    onSpeakClick = { viewModel.speakMessage(msg.id, msg.text) }
+                )
             }
         }
 
-        // 底部输入框
+        // 语音输入正在聆听动态浮条
+        AnimatedVisibility(
+            visible = isListening,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(16.dp),
+                tonalElevation = 4.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = if (!voicePartialText.isNullOrBlank()) "正在聆听: \"$voicePartialText\"" else "正在聆听语音输入...",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines = 1
+                        )
+                    }
+                    TextButton(onClick = { viewModel.stopVoiceRecording() }) {
+                        Text("完成", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // 底部输入栏
         if (isModelLoaded) {
-            var inputText by remember { mutableStateOf("") }
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -126,18 +210,56 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("发送消息给端侧大模型...") },
+                        placeholder = { Text("输入消息或点击语音...") },
                         shape = RoundedCornerShape(24.dp),
                         singleLine = true
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // ASR 语音输入按钮
+                    FilledIconButton(
+                        onClick = {
+                            if (isListening) {
+                                viewModel.stopVoiceRecording()
+                            } else {
+                                val hasPermission = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+
+                                if (hasPermission) {
+                                    viewModel.startVoiceRecording { recognized ->
+                                        inputText = recognized
+                                    }
+                                } else {
+                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(46.dp),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = if (isListening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = if (isListening) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (isListening) Icons.Default.Stop else Icons.Default.Mic,
+                            contentDescription = if (isListening) "停止录音" else "语音输入",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // 发送按钮
                     FloatingActionButton(
                         onClick = {
                             if (inputText.isNotBlank()) {
@@ -147,9 +269,9 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         },
                         containerColor = MaterialTheme.colorScheme.primary,
                         shape = CircleShape,
-                        modifier = Modifier.size(50.dp)
+                        modifier = Modifier.size(46.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
                     }
                 }
             }

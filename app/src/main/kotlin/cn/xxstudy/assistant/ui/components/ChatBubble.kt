@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -15,7 +18,11 @@ import androidx.compose.ui.unit.sp
 import cn.xxstudy.assistant.viewmodel.ChatMessage
 
 @Composable
-fun ChatBubble(msg: ChatMessage) {
+fun ChatBubble(
+    msg: ChatMessage,
+    isSpeakingThis: Boolean = false,
+    onSpeakClick: (() -> Unit)? = null
+) {
     val isUser = msg.isUser
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -30,9 +37,9 @@ fun ChatBubble(msg: ChatMessage) {
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "AI", 
-                    fontSize = 12.sp, 
-                    fontWeight = FontWeight.Bold, 
+                    text = "AI",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onTertiaryContainer
                 )
             }
@@ -64,14 +71,42 @@ fun ChatBubble(msg: ChatMessage) {
                             fontSize = 15.sp,
                             lineHeight = 22.sp
                         )
-                        if (!msg.metrics.isNullOrEmpty()) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = msg.metrics,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                fontSize = 10.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
+
+                        // 性能指标与 TTS 语音播放按钮栏
+                        if (!isUser) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (!msg.metrics.isNullOrEmpty()) {
+                                    Text(
+                                        text = msg.metrics,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                        fontSize = 10.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                } else {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+
+                                if (onSpeakClick != null && msg.text.isNotBlank()) {
+                                    IconButton(
+                                        onClick = onSpeakClick,
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isSpeakingThis) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                                            contentDescription = if (isSpeakingThis) "停止朗读" else "语音朗读",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = if (isSpeakingThis) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
