@@ -17,6 +17,10 @@
 
 ## 📖 项目简介
 
+<p align="center">
+  <img src="docs/images/ui.jpg" alt="Architecture Flow" width="50%">
+</p>
+
 **SenseAssistant** 是一个专为 Android 移动端打造的高性能、轻量化本地大模型底座与私有微服务应用。
 
 利用退役闲置的旧安卓手机（实测三星 Galaxy S20 / 高通骁龙 865），通过纯原生 **Android NDK + C++17** 封装 `llama.cpp`，压榨 ARMv8.2-A 点积指令集硬件算力，在 **纯 CPU 环境下跑出 36 token/s** 的飞速推理。
