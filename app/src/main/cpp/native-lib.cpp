@@ -237,3 +237,6 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     
     return env->NewStringUTF(response.c_str());
 }
+
+
+

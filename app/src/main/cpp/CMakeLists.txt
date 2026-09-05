@@ -3,6 +3,7 @@ project("sense_assistant")
 
 # 引入头文件目录
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # 引入预编译的 llama.cpp 核心动态链接库
 add_library(llama SHARED IMPORTED)
@@ -31,7 +32,7 @@ set_target_properties(omp PROPERTIES
     IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libomp.so
 )
 
-# 编译应用专属的 JNI 桥接库
+# 编译应用专属的 JNI 桥接库 (llama.cpp 交互)
 add_library(${CMAKE_PROJECT_NAME} SHARED
         native-lib.cpp)
 
@@ -43,3 +44,4 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         ggml-base
         omp
         log)
+

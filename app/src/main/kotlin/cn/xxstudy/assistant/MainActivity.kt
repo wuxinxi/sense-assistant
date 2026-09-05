@@ -1,6 +1,9 @@
 package cn.xxstudy.assistant
 
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -30,6 +33,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+        AppSettings.init(application)
+        handleIntent(intent)
         setContent {
             val themeMode by AppSettings.themeMode.collectAsState()
             val colorTheme by AppSettings.colorTheme.collectAsState()
@@ -75,6 +91,26 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        val sid = intent?.getIntExtra("sid", -1) ?: -1
+        if (sid in 0..173) {
+            AppSettings.setTtsSpeakerId(sid)
+        }
+        val prompt = intent?.getStringExtra("prompt")
+        if (!prompt.isNullOrBlank()) {
+            viewModel.sendMessage(prompt)
+        }
+        val ttsText = intent?.getStringExtra("tts")
+        if (!ttsText.isNullOrBlank()) {
+            viewModel.speechManager.speak(ttsText)
         }
     }
 

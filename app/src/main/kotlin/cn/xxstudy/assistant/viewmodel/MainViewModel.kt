@@ -69,10 +69,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _chatMessages.value = listOf(
                     ChatMessage(messageCounter++, false, "您好！我是部署在您本地终端的 AI，目前引擎已就绪，您的所有数据均不会上传云端。")
                 )
-                // 启动本地 Ktor 微服务，暴露接口供其他 App 跨进程调用
-                cn.xxstudy.assistant.server.LlamaServer.start(repository)
+                // 动态根据设置启动或停止本地微服务
+                if (cn.xxstudy.assistant.data.AppSettings.localServerEnabled.value) {
+                    cn.xxstudy.assistant.server.LlamaServer.start(repository)
+                }
             } else {
                 _statusMessage.value = "加载失败"
+            }
+        }
+
+        viewModelScope.launch {
+            cn.xxstudy.assistant.data.AppSettings.localServerEnabled.collect { enabled ->
+                if (_isModelLoaded.value) {
+                    if (enabled) {
+                        cn.xxstudy.assistant.server.LlamaServer.start(repository)
+                    } else {
+                        cn.xxstudy.assistant.server.LlamaServer.stop()
+                    }
+                }
             }
         }
     }
@@ -139,10 +153,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
+                var chunker: cn.xxstudy.assistant.speech.SentenceChunker? = null
+                if (cn.xxstudy.assistant.data.AppSettings.ttsAutoPlay.value) {
+                    chunker = speechManager.createSentenceChunker()
+                    _speakingMessageId.value = thinkingId
+                }
+
                 // 调用带有打断检测的推理方法
                 val rawResponse = repository.generateText(prompt) { token ->
                     channel.trySend(token)
+                    chunker?.onToken(token)
                 }
+
+                chunker?.flush()
 
                 // 推理结束，关闭 channel 并等待 UI 刷新完最后一批字符
                 channel.close()
@@ -162,11 +185,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (it.id == thinkingId) it.copy(text = actualText, isThinking = false, metrics = metricsInfo) else it
                 }
                 _chatMessages.value = finalUpdatedList
-
-                // 检查设置：如果开启了自动朗读，且当前非空，则自动调用 TTS 播报
-                if (AppSettings.ttsAutoPlay.value && actualText.isNotBlank()) {
-                    speakMessage(thinkingId, actualText)
-                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 收到新消息打断时，安全退出
                 channel.close()
@@ -260,6 +278,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        cn.xxstudy.assistant.server.LlamaServer.stop()
         speechManager.destroy()
     }
 }

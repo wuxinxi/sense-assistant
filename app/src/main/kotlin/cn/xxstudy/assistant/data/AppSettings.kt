@@ -30,6 +30,7 @@ object AppSettings {
     private const val KEY_TTS_AUTO_PLAY = "key_tts_auto_play"
     private const val KEY_TTS_SPEECH_RATE = "key_tts_speech_rate"
     private const val KEY_TTS_PITCH = "key_tts_pitch"
+    private const val KEY_TTS_SPEAKER_ID = "key_tts_speaker_id"
     private const val KEY_HAPTIC_ENABLED = "key_haptic_enabled"
     private const val KEY_LOCAL_SERVER_ENABLED = "key_local_server_enabled"
 
@@ -48,7 +49,7 @@ object AppSettings {
     private val _asrAutoSend = MutableStateFlow(false)
     val asrAutoSend: StateFlow<Boolean> = _asrAutoSend.asStateFlow()
 
-    private val _ttsAutoPlay = MutableStateFlow(false)
+    private val _ttsAutoPlay = MutableStateFlow(true)
     val ttsAutoPlay: StateFlow<Boolean> = _ttsAutoPlay.asStateFlow()
 
     private val _ttsSpeechRate = MutableStateFlow(1.0f)
@@ -56,6 +57,9 @@ object AppSettings {
 
     private val _ttsPitch = MutableStateFlow(1.0f)
     val ttsPitch: StateFlow<Float> = _ttsPitch.asStateFlow()
+
+    private val _ttsSpeakerId = MutableStateFlow(0)
+    val ttsSpeakerId: StateFlow<Int> = _ttsSpeakerId.asStateFlow()
 
     private val _hapticEnabled = MutableStateFlow(true)
     val hapticEnabled: StateFlow<Boolean> = _hapticEnabled.asStateFlow()
@@ -75,9 +79,10 @@ object AppSettings {
         _asrLanguage.value = prefs.getString(KEY_ASR_LANGUAGE, "zh-CN") ?: "zh-CN"
         _asrAutoSend.value = prefs.getBoolean(KEY_ASR_AUTO_SEND, false)
 
-        _ttsAutoPlay.value = prefs.getBoolean(KEY_TTS_AUTO_PLAY, false)
+        _ttsAutoPlay.value = prefs.getBoolean(KEY_TTS_AUTO_PLAY, true)
         _ttsSpeechRate.value = prefs.getFloat(KEY_TTS_SPEECH_RATE, 1.0f)
         _ttsPitch.value = prefs.getFloat(KEY_TTS_PITCH, 1.0f)
+        _ttsSpeakerId.value = prefs.getInt(KEY_TTS_SPEAKER_ID, 0).coerceIn(0, 173)
 
         _hapticEnabled.value = prefs.getBoolean(KEY_HAPTIC_ENABLED, true)
         _localServerEnabled.value = prefs.getBoolean(KEY_LOCAL_SERVER_ENABLED, true)
@@ -85,46 +90,52 @@ object AppSettings {
 
     fun setThemeMode(mode: ThemeMode) {
         _themeMode.value = mode
-        prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
+        if (::prefs.isInitialized) prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
     }
 
     fun setColorTheme(theme: ColorTheme) {
         _colorTheme.value = theme
-        prefs.edit().putString(KEY_COLOR_THEME, theme.name).apply()
+        if (::prefs.isInitialized) prefs.edit().putString(KEY_COLOR_THEME, theme.name).apply()
     }
 
     fun setAsrLanguage(language: String) {
         _asrLanguage.value = language
-        prefs.edit().putString(KEY_ASR_LANGUAGE, language).apply()
+        if (::prefs.isInitialized) prefs.edit().putString(KEY_ASR_LANGUAGE, language).apply()
     }
 
     fun setAsrAutoSend(autoSend: Boolean) {
         _asrAutoSend.value = autoSend
-        prefs.edit().putBoolean(KEY_ASR_AUTO_SEND, autoSend).apply()
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_ASR_AUTO_SEND, autoSend).apply()
     }
 
     fun setTtsAutoPlay(autoPlay: Boolean) {
         _ttsAutoPlay.value = autoPlay
-        prefs.edit().putBoolean(KEY_TTS_AUTO_PLAY, autoPlay).apply()
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_TTS_AUTO_PLAY, autoPlay).apply()
     }
 
     fun setTtsSpeechRate(rate: Float) {
         _ttsSpeechRate.value = rate
-        prefs.edit().putFloat(KEY_TTS_SPEECH_RATE, rate).apply()
+        if (::prefs.isInitialized) prefs.edit().putFloat(KEY_TTS_SPEECH_RATE, rate).apply()
     }
 
     fun setTtsPitch(pitch: Float) {
         _ttsPitch.value = pitch
-        prefs.edit().putFloat(KEY_TTS_PITCH, pitch).apply()
+        if (::prefs.isInitialized) prefs.edit().putFloat(KEY_TTS_PITCH, pitch).apply()
+    }
+
+    fun setTtsSpeakerId(speakerId: Int) {
+        val clamped = speakerId.coerceIn(0, 173)
+        _ttsSpeakerId.value = clamped
+        if (::prefs.isInitialized) prefs.edit().putInt(KEY_TTS_SPEAKER_ID, clamped).apply()
     }
 
     fun setHapticEnabled(enabled: Boolean) {
         _hapticEnabled.value = enabled
-        prefs.edit().putBoolean(KEY_HAPTIC_ENABLED, enabled).apply()
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_HAPTIC_ENABLED, enabled).apply()
     }
 
     fun setLocalServerEnabled(enabled: Boolean) {
         _localServerEnabled.value = enabled
-        prefs.edit().putBoolean(KEY_LOCAL_SERVER_ENABLED, enabled).apply()
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_LOCAL_SERVER_ENABLED, enabled).apply()
     }
 }

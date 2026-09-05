@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import cn.xxstudy.assistant.data.AppSettings
 import cn.xxstudy.assistant.ui.components.ChatBubble
 import cn.xxstudy.assistant.ui.components.DoubaoInputBar
 import cn.xxstudy.assistant.ui.components.DoubaoVoicePanel
@@ -37,6 +38,8 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val statusMessage by viewModel.statusMessage.collectAsState()
     val chatMessages by viewModel.chatMessages.collectAsState()
     val speakingMessageId by viewModel.speakingMessageId.collectAsState()
+
+    val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
 
     val listeningRms by viewModel.listeningRms.collectAsState()
     val voicePartialText by viewModel.voicePartialText.collectAsState()
@@ -209,7 +212,9 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
 
                     isPressingVoice = true
                     isCancelVoice = false
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    if (hapticEnabled) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
 
                     viewModel.startVoiceRecording(
                         autoSend = true,
@@ -222,7 +227,9 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     val nowCancel = deltaY < -cancelThresholdPx
                     if (nowCancel != isCancelVoice) {
                         isCancelVoice = nowCancel
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (hapticEnabled) {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
                     }
                 },
                 onVoiceUp = {

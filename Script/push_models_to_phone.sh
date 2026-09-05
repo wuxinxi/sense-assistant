@@ -46,7 +46,17 @@ else
     echo "⚠️ 未在本地检测到完整的 sense-voice-int8 模型，请先运行: bash Script/download_all.sh"
 fi
 
-# 5. 推送 Qwen 大模型（若存在）
+# 5. 推送 VITS AISHELL-3 轻量离线语音合成模型 (约 40MB)
+VITS_TTS_DIR="$PROJECT_ROOT/vits-zh-aishell3"
+if [ -d "$VITS_TTS_DIR" ] && [ -f "$VITS_TTS_DIR/vits-aishell3.int8.onnx" ]; then
+    echo "🚀 正在推送 VITS AISHELL-3 (38MB INT8) 极速离线语音合成模型到手机..."
+    adb push "$VITS_TTS_DIR" "$TARGET_DIR/"
+    echo "✅ VITS-TTS 模型推送完成！"
+else
+    echo "⚠️ 未在本地检测到完整的 vits-zh-aishell3 模型，请先运行: python3 Script/download_models.py"
+fi
+
+# 6. 推送 Qwen 大模型（若存在）
 QWEN_GGUF=$(find "$PROJECT_ROOT" -maxdepth 2 -name "*qwen*.gguf" | head -n 1)
 if [ -n "$QWEN_GGUF" ] && [ -f "$QWEN_GGUF" ]; then
     echo "🚀 正在推送 LLM 大模型权重: $(basename "$QWEN_GGUF") ..."
@@ -54,9 +64,9 @@ if [ -n "$QWEN_GGUF" ] && [ -f "$QWEN_GGUF" ]; then
     echo "✅ LLM 模型推送完成！"
 fi
 
-# 6. 关键：修复 Android Linux 权限，确保 App 独立 UID 进程拥有完整读取和进入权限
+# 7. 关键：修复 Android Linux 权限，确保 App 独立 UID 进程拥有完整读取和进入权限
 echo "🛡️ 正在授予应用私有沙盒完整读写权限..."
-adb shell "chmod -R 777 /sdcard/Android/data/${PACKAGE_NAME}/files"
+adb shell "chmod -R 777 $TARGET_DIR 2>/dev/null || true"
 
 echo "============================================================"
 echo "🎉 所有模型推送与权限配置完毕！可以在手机上打开 App 体验纯离线语音识别了。"

@@ -24,16 +24,10 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 # 严格保留原有路径及所需模型
 TASKS = [
     {
-        "title": "MOSS TTS Nano (语音合成模型)",
-        "repo_id": "OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX",
-        "local_dir": PROJECT_ROOT / "moss-tts-nano",
-        "allow_patterns": None,  # 下载该仓库全部文件
-    },
-    {
-        "title": "MOSS Audio Tokenizer Nano (音频分词器)",
-        "repo_id": "OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX",
-        "local_dir": PROJECT_ROOT / "moss-tokenizer-nano",
-        "allow_patterns": None,  # 下载该仓库全部文件
+        "title": "VITS AISHELL-3 中文语音合成 (轻量 38MB)",
+        "repo_id": "csukuangfj/vits-zh-aishell3",
+        "local_dir": PROJECT_ROOT / "vits-zh-aishell3",
+        "allow_patterns": ["vits-aishell3.int8.onnx", "lexicon.txt", "tokens.txt", "date.fst", "number.fst", "phone.fst", "new_heteronym.fst"],
     },
     {
         "title": "SenseVoice Small INT8 (语音识别模型)",

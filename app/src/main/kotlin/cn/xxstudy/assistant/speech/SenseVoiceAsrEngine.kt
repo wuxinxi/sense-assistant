@@ -64,7 +64,9 @@ class SenseVoiceAsrEngine(private val context: Context) {
     private var onErrorCallback: ((String) -> Unit)? = null
 
     init {
-        initEngine()
+        scope.launch(Dispatchers.IO) {
+            initEngine()
+        }
     }
 
     /**
@@ -118,10 +120,13 @@ class SenseVoiceAsrEngine(private val context: Context) {
         val modelPath = File(foundDir, "model.int8.onnx").absolutePath
         val tokensPath = File(foundDir, "tokens.txt").absolutePath
 
+        val initialLang = mapLanguageCode(cn.xxstudy.assistant.data.AppSettings.asrLanguage.value)
+        currentLanguage = initialLang
+
         try {
             val senseVoiceConfig = OfflineSenseVoiceModelConfig().apply {
                 model = modelPath
-                language = "auto"
+                language = initialLang
                 useInverseTextNormalization = true
             }
 
@@ -141,12 +146,40 @@ class SenseVoiceAsrEngine(private val context: Context) {
 
             recognizer = OfflineRecognizer(assetManager = null, config = recognizerConfig)
             isEngineReady = true
-            Log.w(TAG, "✅ SenseVoice 离线识别引擎加载成功！准备就绪。")
+            Log.w(TAG, "✅ SenseVoice 离线识别引擎加载成功 (language=$initialLang)！准备就绪。")
             return true
         } catch (e: Throwable) {
             Log.e(TAG, "❌ 初始化 SenseVoice 识别引擎失败", e)
             isEngineReady = false
             return false
+        }
+    }
+
+    private var currentLanguage: String = "auto"
+
+    fun updateLanguage(langCode: String) {
+        val normalized = mapLanguageCode(langCode)
+        if (normalized == currentLanguage && isEngineReady) return
+        currentLanguage = normalized
+        val rec = recognizer ?: return
+        try {
+            val cfg = rec.config
+            cfg.modelConfig.senseVoice.language = normalized
+            rec.setConfig(cfg)
+            Log.i(TAG, "SenseVoice 离线引擎语言已更新为: $normalized")
+        } catch (e: Throwable) {
+            Log.w(TAG, "动态更新 SenseVoice 语言配置异常: ${e.message}")
+        }
+    }
+
+    private fun mapLanguageCode(code: String): String {
+        return when (code.lowercase()) {
+            "zh", "zh-cn", "chinese" -> "zh"
+            "en", "en-us", "english" -> "en"
+            "yue", "cantonese" -> "yue"
+            "ja", "japanese" -> "ja"
+            "ko", "korean" -> "ko"
+            else -> "auto"
         }
     }
 
@@ -161,6 +194,7 @@ class SenseVoiceAsrEngine(private val context: Context) {
         onFinal: (String) -> Unit,
         onError: (String) -> Unit
     ) {
+        updateLanguage(language)
         onPartialCallback = onPartial
         onFinalCallback = onFinal
         onErrorCallback = onError

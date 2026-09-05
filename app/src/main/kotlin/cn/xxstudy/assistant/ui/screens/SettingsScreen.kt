@@ -6,6 +6,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -35,6 +36,23 @@ import cn.xxstudy.assistant.data.ThemeMode
 import cn.xxstudy.assistant.speech.SpeechManager
 import kotlin.math.roundToInt
 
+data class CuratedSpeaker(
+    val id: Int,
+    val name: String,
+    val role: String,
+    val desc: String
+)
+
+val OFFICIAL_CURATED_SPEAKERS = listOf(
+    CuratedSpeaker(0, "官方默认", "标准女声", "Default · 规范播音"),
+    CuratedSpeaker(10, "清亮少女", "Liliana", "轻快生动 · 少女感"),
+    CuratedSpeaker(21, "正气男声", "刘备", "沉稳正气 · 经典男声"),
+    CuratedSpeaker(33, "温和青年", "自然男声", "亲和叙事 · 自然沉静"),
+    CuratedSpeaker(45, "儒雅博学", "诸葛亮", "富有哲思 · 讲解质感"),
+    CuratedSpeaker(66, "播音主持", "Rule 女声", "标准普通话 · 规范清晰"),
+    CuratedSpeaker(103, "沉稳长读", "数符示范", "平稳耐听 · 长文本/数字")
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -52,6 +70,7 @@ fun SettingsScreen(
     val ttsAutoPlay by AppSettings.ttsAutoPlay.collectAsState()
     val ttsSpeechRate by AppSettings.ttsSpeechRate.collectAsState()
     val ttsPitch by AppSettings.ttsPitch.collectAsState()
+    val ttsSpeakerId by AppSettings.ttsSpeakerId.collectAsState()
     val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
     val localServerEnabled by AppSettings.localServerEnabled.collectAsState()
 
@@ -280,6 +299,165 @@ fun SettingsScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        // 1. 发音人音色选择 (官方精选推荐 + 极客微调)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // 标题栏：发音人音色与当前选中标签
+                            val activeCurated = OFFICIAL_CURATED_SPEAKERS.find { it.id == ttsSpeakerId }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.RecordVoiceOver,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("发音人音色", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                                SuggestionChip(
+                                    onClick = {},
+                                    label = {
+                                        Text(
+                                            text = if (activeCurated != null) "#$ttsSpeakerId · ${activeCurated.name}" else "Speaker #$ttsSpeakerId",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    },
+                                    colors = SuggestionChipDefaults.suggestionChipColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    ),
+                                    border = null,
+                                    modifier = Modifier.height(28.dp)
+                                )
+                            }
+
+                            // 官方精选推荐 (横向滑动胶囊)
+                            Text(
+                                text = "官方精选推荐 (基于 AISHELL-3 官方语料)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OFFICIAL_CURATED_SPEAKERS.forEach { speaker ->
+                                    val isSelected = (ttsSpeakerId == speaker.id)
+                                    FilterChip(
+                                        selected = isSelected,
+                                        onClick = {
+                                            triggerHaptic()
+                                            AppSettings.setTtsSpeakerId(speaker.id)
+                                        },
+                                        label = {
+                                            Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                                Text(
+                                                    text = "#${speaker.id} ${speaker.name}",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                                )
+                                                Text(
+                                                    text = speaker.role,
+                                                    fontSize = 10.sp,
+                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        },
+                                        leadingIcon = if (isSelected) {
+                                            {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
+                                        } else null,
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                                thickness = 0.5.dp
+                            )
+
+                            // 极客全量微调 (0 ~ 173 滑杆与 +/- 按钮)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "全量微调 (0 ~ 173)",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = if (activeCurated != null) activeCurated.desc else "极客自定义音色",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        triggerHaptic()
+                                        AppSettings.setTtsSpeakerId(ttsSpeakerId - 1)
+                                    },
+                                    enabled = ttsSpeakerId > 0,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Remove, contentDescription = "上一音色", modifier = Modifier.size(16.dp))
+                                }
+
+                                Slider(
+                                    value = ttsSpeakerId.toFloat(),
+                                    onValueChange = {
+                                        AppSettings.setTtsSpeakerId(it.roundToInt())
+                                    },
+                                    valueRange = 0f..173f,
+                                    steps = 172,
+                                    modifier = Modifier.weight(1f)
+                                )
+
+                                IconButton(
+                                    onClick = {
+                                        triggerHaptic()
+                                        AppSettings.setTtsSpeakerId(ttsSpeakerId + 1)
+                                    },
+                                    enabled = ttsSpeakerId < 173,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = "下一音色", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+
                         // 语速滑杆
                         Column {
                             Row(
@@ -315,6 +493,8 @@ fun SettingsScreen(
                         }
 
                         // 试听按钮
+                        val activeSpeaker = OFFICIAL_CURATED_SPEAKERS.find { it.id == ttsSpeakerId }
+                        val speakerLabel = if (activeSpeaker != null) "${activeSpeaker.name} (${activeSpeaker.role})" else "${ttsSpeakerId} 号发音人"
                         Button(
                             onClick = {
                                 triggerHaptic()
@@ -322,7 +502,7 @@ fun SettingsScreen(
                                     speechManager.stopSpeaking()
                                 } else {
                                     speechManager.speak(
-                                        text = "您好！这是当前的语音播报音效测试。我正在本地离线运行。",
+                                        text = "您好！这是当前的 ${speakerLabel} 音效测试。我正在本地离线运行。",
                                         speechRate = ttsSpeechRate,
                                         pitch = ttsPitch
                                     )
@@ -340,7 +520,7 @@ fun SettingsScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isSpeaking) "停止试听" else "试听当前声音设置")
+                            Text(if (isSpeaking) "停止试听" else "试听当前声音设置 ($speakerLabel)")
                         }
                     }
                 }
@@ -397,6 +577,11 @@ fun SettingsScreen(
                             onCheckedChange = {
                                 triggerHaptic()
                                 AppSettings.setLocalServerEnabled(it)
+                                Toast.makeText(
+                                    context,
+                                    if (it) "微服务已开启: 0.0.0.0:8989" else "微服务已停止",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         )
                     }
