@@ -60,6 +60,50 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject th
     return JNI_TRUE;
 }
 
+// 计算字符串中最后一个完整 UTF-8 字符的结束偏移量
+// 若尾部存在残缺的多字节字符（例如汉字/Emoji 跨 Token 截断只吐出 1~2 字节），返回完整部分的长度以供留存缓冲
+static size_t get_complete_utf8_length(const std::string &s) {
+    size_t i = 0;
+    size_t last_complete = 0;
+    const size_t len = s.length();
+    while (i < len) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        size_t char_len = 0;
+        if ((c & 0x80) == 0) {
+            char_len = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            char_len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            char_len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            char_len = 4;
+        } else {
+            // 非法引导字节，单字节跳过避免死循环
+            char_len = 1;
+        }
+
+        if (i + char_len <= len) {
+            bool valid = true;
+            for (size_t j = 1; j < char_len; ++j) {
+                if ((static_cast<unsigned char>(s[i + j]) & 0xC0) != 0x80) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) {
+                i += char_len;
+            } else {
+                i += 1;
+            }
+            last_complete = i;
+        } else {
+            // 遇到末尾残缺的多字节 UTF-8 字符，跳出循环等待后续字节拼齐
+            break;
+        }
+    }
+    return last_complete;
+}
+
 // 统一受互斥锁保护并支持即时打断的推理接口
 extern "C"
 JNIEXPORT jstring JNICALL
@@ -113,6 +157,7 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
     
     std::string response = "";
+    std::string token_stream_buf = "";
     int max_predict = 256; 
     
     bool is_first_token = true;
@@ -148,10 +193,18 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
         int n_chars = llama_token_to_piece(vocab, id, buf, sizeof(buf), 0, false);
         if (n_chars > 0) {
             response.append(buf, n_chars);
-            // 流式回调回传给 Kotlin
-            jstring j_token = env->NewStringUTF(std::string(buf, n_chars).c_str());
-            env->CallVoidMethod(callback, onTokenMethod, j_token);
-            env->DeleteLocalRef(j_token);
+            token_stream_buf.append(buf, n_chars);
+
+            // 核心修复：检查缓冲区中完整 UTF-8 字符长度，防止中文字符跨 Token 截断导致 NewStringUTF 报 illegal continuation byte 闪退
+            size_t complete_len = get_complete_utf8_length(token_stream_buf);
+            if (complete_len > 0) {
+                std::string ready_text = token_stream_buf.substr(0, complete_len);
+                token_stream_buf.erase(0, complete_len);
+
+                jstring j_token = env->NewStringUTF(ready_text.c_str());
+                env->CallVoidMethod(callback, onTokenMethod, j_token);
+                env->DeleteLocalRef(j_token);
+            }
         }
         
         // 将新 token 放回上下文准备下一轮推理
@@ -169,6 +222,12 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
         speed = (generated_tokens - 1) * 1000.0 / (total_ms - ttft_ms);
     }
     
+    // 确保 response 尾部也是合法完整的 UTF-8，防止异常打断时截断汉字导致最终返回闪退
+    size_t resp_complete_len = get_complete_utf8_length(response);
+    if (resp_complete_len < response.length()) {
+        response.erase(resp_complete_len);
+    }
+
     char metrics_buf[256];
     snprintf(metrics_buf, sizeof(metrics_buf), "<|metrics|>{\"ttft_ms\":%lld,\"total_ms\":%lld,\"speed\":%.1f}", ttft_ms, total_ms, speed);
     response += metrics_buf;
