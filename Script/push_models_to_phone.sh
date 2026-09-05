@@ -46,14 +46,19 @@ else
     echo "⚠️ 未在本地检测到完整的 sense-voice-int8 模型，请先运行: bash Script/download_all.sh"
 fi
 
-# 5. 推送 VITS AISHELL-3 轻量离线语音合成模型 (约 40MB)
+# 5. 推送 VITS MeloTTS 中英双语超清离线语音合成模型 (优先) 或 AISHELL-3
+MELO_TTS_DIR="$PROJECT_ROOT/vits-melo-tts-zh_en"
 VITS_TTS_DIR="$PROJECT_ROOT/vits-zh-aishell3"
-if [ -d "$VITS_TTS_DIR" ] && [ -f "$VITS_TTS_DIR/vits-aishell3.int8.onnx" ]; then
-    echo "🚀 正在推送 VITS AISHELL-3 (38MB INT8) 极速离线语音合成模型到手机..."
+if [ -d "$MELO_TTS_DIR" ] && { [ -f "$MELO_TTS_DIR/model.int8.onnx" ] || [ -f "$MELO_TTS_DIR/model.onnx" ]; }; then
+    echo "🚀 正在推送 VITS MeloTTS (44.1kHz 中英双语超清) 离线语音合成模型到手机..."
+    adb push "$MELO_TTS_DIR" "$TARGET_DIR/"
+    echo "✅ VITS MeloTTS 模型推送完成！"
+elif [ -d "$VITS_TTS_DIR" ] && [ -f "$VITS_TTS_DIR/vits-aishell3.int8.onnx" ]; then
+    echo "🚀 正在推送备用 VITS AISHELL-3 离线语音合成模型到手机..."
     adb push "$VITS_TTS_DIR" "$TARGET_DIR/"
     echo "✅ VITS-TTS 模型推送完成！"
 else
-    echo "⚠️ 未在本地检测到完整的 vits-zh-aishell3 模型，请先运行: python3 Script/download_models.py"
+    echo "⚠️ 未在本地检测到完整的 TTS 模型，请先运行: python3 Script/download_models.py"
 fi
 
 # 6. 推送 Qwen 大模型（若存在）

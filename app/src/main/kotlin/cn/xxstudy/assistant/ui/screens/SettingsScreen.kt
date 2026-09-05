@@ -43,6 +43,64 @@ data class CuratedSpeaker(
     val desc: String
 )
 
+data class MeloVoicePreset(
+    val id: String,
+    val name: String,
+    val role: String,
+    val pitch: Float,
+    val speechRate: Float,
+    val desc: String,
+    val icon: ImageVector
+)
+
+val MELO_VOICE_PRESETS = listOf(
+    MeloVoicePreset(
+        id = "default",
+        name = "标准助手",
+        role = "原声",
+        pitch = 1.0f,
+        speechRate = 1.0f,
+        desc = "清晰亲和 · 44.1kHz 母带原声女声",
+        icon = Icons.Default.Face
+    ),
+    MeloVoicePreset(
+        id = "male",
+        name = "沉稳男声",
+        role = "青年男声",
+        pitch = 0.82f,
+        speechRate = 0.96f,
+        desc = "低沉磁性 · 极客青年男声音色",
+        icon = Icons.Default.RecordVoiceOver
+    ),
+    MeloVoicePreset(
+        id = "girl",
+        name = "元气少女",
+        role = "灵动少女",
+        pitch = 1.20f,
+        speechRate = 1.05f,
+        desc = "清亮甜美 · 灵动少女音色",
+        icon = Icons.Default.Mood
+    ),
+    MeloVoicePreset(
+        id = "scholar",
+        name = "知性儒雅",
+        role = "沉静叙事",
+        pitch = 0.90f,
+        speechRate = 0.92f,
+        desc = "温和从容 · 知性读书质感",
+        icon = Icons.Default.AutoStories
+    ),
+    MeloVoicePreset(
+        id = "anchor",
+        name = "敏捷播报",
+        role = "新闻播音",
+        pitch = 1.05f,
+        speechRate = 1.20f,
+        desc = "干练利落 · 资讯播报快节奏",
+        icon = Icons.Default.FlashOn
+    )
+)
+
 val OFFICIAL_CURATED_SPEAKERS = listOf(
     CuratedSpeaker(0, "官方默认", "标准女声", "Default · 规范播音"),
     CuratedSpeaker(10, "清亮少女", "Liliana", "轻快生动 · 少女感"),
@@ -75,6 +133,8 @@ fun SettingsScreen(
     val localServerEnabled by AppSettings.localServerEnabled.collectAsState()
 
     val isSpeaking by speechManager.isSpeaking.collectAsState()
+    val isBilingualTts by speechManager.isBilingualTts.collectAsState()
+    val ttsNumSpeakers by speechManager.ttsNumSpeakers.collectAsState()
 
     // Dialog 状态控制
     var showLanguageDialog by remember { mutableStateOf(false) }
@@ -258,7 +318,7 @@ fun SettingsScreen(
                     icon = Icons.Default.VolumeUp,
                     iconBgColor = Color(0xFFFF9800),
                     title = "答案语音朗读 (TTS)",
-                    subtitle = "AI 完整生成回答后，自动使用离线语音引擎发音",
+                    subtitle = if (isBilingualTts) "MeloTTS 44.1kHz 录音棚高保真 · 原生中英双语混读" else "AI 完整生成回答后，自动使用离线语音引擎发音",
                     trailing = {
                         Switch(
                             checked = ttsAutoPlay,
@@ -299,161 +359,260 @@ fun SettingsScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // 1. 发音人音色选择 (官方精选推荐 + 极客微调)
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            // 标题栏：发音人音色与当前选中标签
-                            val activeCurated = OFFICIAL_CURATED_SPEAKERS.find { it.id == ttsSpeakerId }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.RecordVoiceOver,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("发音人音色", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                }
-                                SuggestionChip(
-                                    onClick = {},
-                                    label = {
-                                        Text(
-                                            text = if (activeCurated != null) "#$ttsSpeakerId · ${activeCurated.name}" else "Speaker #$ttsSpeakerId",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 12.sp
-                                        )
-                                    },
-                                    colors = SuggestionChipDefaults.suggestionChipColors(
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                        labelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                    ),
-                                    border = null,
-                                    modifier = Modifier.height(28.dp)
-                                )
+                        // 1. 发音人音色选择 (MeloTTS 专属超清卡片 或 AISHELL-3 多音色选择)
+                        if (isBilingualTts && ttsNumSpeakers <= 1) {
+                            val activeMeloPreset = MELO_VOICE_PRESETS.find {
+                                kotlin.math.abs(it.pitch - ttsPitch) < 0.04f && kotlin.math.abs(it.speechRate - ttsSpeechRate) < 0.05f
                             }
-
-                            // 官方精选推荐 (横向滑动胶囊)
-                            Text(
-                                text = "官方精选推荐 (基于 AISHELL-3 官方语料)",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
+                                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                OFFICIAL_CURATED_SPEAKERS.forEach { speaker ->
-                                    val isSelected = (ttsSpeakerId == speaker.id)
-                                    FilterChip(
-                                        selected = isSelected,
-                                        onClick = {
-                                            triggerHaptic()
-                                            AppSettings.setTtsSpeakerId(speaker.id)
-                                        },
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.AutoAwesome,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("精选角色音色 (44.1kHz)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                    SuggestionChip(
+                                        onClick = {},
                                         label = {
-                                            Column(modifier = Modifier.padding(vertical = 2.dp)) {
-                                                Text(
-                                                    text = "#${speaker.id} ${speaker.name}",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                                )
-                                                Text(
-                                                    text = speaker.role,
-                                                    fontSize = 10.sp,
-                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
+                                            Text(
+                                                text = if (activeMeloPreset != null) "${activeMeloPreset.name} · ${activeMeloPreset.role}" else "自定义微调",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp
+                                            )
                                         },
-                                        leadingIcon = if (isSelected) {
-                                            {
+                                        colors = SuggestionChipDefaults.suggestionChipColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            labelColor = MaterialTheme.colorScheme.onPrimary
+                                        ),
+                                        border = null,
+                                        modifier = Modifier.height(26.dp)
+                                    )
+                                }
+
+                                // 角色音色横向滑动胶囊
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    MELO_VOICE_PRESETS.forEach { preset ->
+                                        val isSelected = (activeMeloPreset?.id == preset.id)
+                                        FilterChip(
+                                            selected = isSelected,
+                                            onClick = {
+                                                triggerHaptic()
+                                                AppSettings.setTtsPitch(preset.pitch)
+                                                AppSettings.setTtsSpeechRate(preset.speechRate)
+                                            },
+                                            label = {
+                                                Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                                    Text(
+                                                        text = preset.name,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                                    )
+                                                    Text(
+                                                        text = preset.role,
+                                                        fontSize = 10.sp,
+                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            },
+                                            leadingIcon = {
                                                 Icon(
-                                                    imageVector = Icons.Default.Check,
+                                                    imageVector = if (isSelected) Icons.Default.Check else preset.icon,
                                                     contentDescription = null,
                                                     modifier = Modifier.size(14.dp)
                                                 )
-                                            }
-                                        } else null,
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
                                         )
-                                    )
+                                    }
                                 }
-                            }
 
-                            HorizontalDivider(
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                                thickness = 0.5.dp
-                            )
-
-                            // 极客全量微调 (0 ~ 173 滑杆与 +/- 按钮)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
                                 Text(
-                                    text = "全量微调 (0 ~ 173)",
+                                    text = if (activeMeloPreset != null) activeMeloPreset.desc else "已手动微调语速和音调",
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                Text(
-                                    text = if (activeCurated != null) activeCurated.desc else "极客自定义音色",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                )
                             }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                IconButton(
-                                    onClick = {
-                                        triggerHaptic()
-                                        AppSettings.setTtsSpeakerId(ttsSpeakerId - 1)
-                                    },
-                                    enabled = ttsSpeakerId > 0,
-                                    modifier = Modifier.size(32.dp)
+                                // 标题栏：发音人音色与当前选中标签
+                                val activeCurated = OFFICIAL_CURATED_SPEAKERS.find { it.id == ttsSpeakerId }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(Icons.Default.Remove, contentDescription = "上一音色", modifier = Modifier.size(16.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.RecordVoiceOver,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("发音人音色", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                    SuggestionChip(
+                                        onClick = {},
+                                        label = {
+                                            Text(
+                                                text = if (activeCurated != null) "#$ttsSpeakerId · ${activeCurated.name}" else "Speaker #$ttsSpeakerId",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp
+                                            )
+                                        },
+                                        colors = SuggestionChipDefaults.suggestionChipColors(
+                                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        ),
+                                        border = null,
+                                        modifier = Modifier.height(28.dp)
+                                    )
                                 }
 
-                                Slider(
-                                    value = ttsSpeakerId.toFloat(),
-                                    onValueChange = {
-                                        AppSettings.setTtsSpeakerId(it.roundToInt())
-                                    },
-                                    valueRange = 0f..173f,
-                                    steps = 172,
-                                    modifier = Modifier.weight(1f)
+                                // 官方精选推荐 (横向滑动胶囊)
+                                Text(
+                                    text = "官方精选推荐 (基于 AISHELL-3 官方语料)",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
 
-                                IconButton(
-                                    onClick = {
-                                        triggerHaptic()
-                                        AppSettings.setTtsSpeakerId(ttsSpeakerId + 1)
-                                    },
-                                    enabled = ttsSpeakerId < 173,
-                                    modifier = Modifier.size(32.dp)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Icon(Icons.Default.Add, contentDescription = "下一音色", modifier = Modifier.size(16.dp))
+                                    OFFICIAL_CURATED_SPEAKERS.forEach { speaker ->
+                                        val isSelected = (ttsSpeakerId == speaker.id)
+                                        FilterChip(
+                                            selected = isSelected,
+                                            onClick = {
+                                                triggerHaptic()
+                                                AppSettings.setTtsSpeakerId(speaker.id)
+                                            },
+                                            label = {
+                                                Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                                    Text(
+                                                        text = "#${speaker.id} ${speaker.name}",
+                                                        fontSize = 12.sp,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                                    )
+                                                    Text(
+                                                        text = speaker.role,
+                                                        fontSize = 10.sp,
+                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            },
+                                            leadingIcon = if (isSelected) {
+                                                {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            } else null,
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        )
+                                    }
+                                }
+
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                                    thickness = 0.5.dp
+                                )
+
+                                // 极客全量微调 (0 ~ 173 滑杆与 +/- 按钮)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "全量微调 (0 ~ 173)",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = if (activeCurated != null) activeCurated.desc else "极客自定义音色",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            triggerHaptic()
+                                            AppSettings.setTtsSpeakerId(ttsSpeakerId - 1)
+                                        },
+                                        enabled = ttsSpeakerId > 0,
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Remove, contentDescription = "上一音色", modifier = Modifier.size(16.dp))
+                                    }
+
+                                    Slider(
+                                        value = ttsSpeakerId.toFloat(),
+                                        onValueChange = {
+                                            AppSettings.setTtsSpeakerId(it.roundToInt())
+                                        },
+                                        valueRange = 0f..173f,
+                                        steps = 172,
+                                        modifier = Modifier.weight(1f)
+                                    )
+
+                                    IconButton(
+                                        onClick = {
+                                            triggerHaptic()
+                                            AppSettings.setTtsSpeakerId(ttsSpeakerId + 1)
+                                        },
+                                        enabled = ttsSpeakerId < 173,
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = "下一音色", modifier = Modifier.size(16.dp))
+                                    }
                                 }
                             }
                         }
@@ -493,16 +652,40 @@ fun SettingsScreen(
                         }
 
                         // 试听按钮
+                        val activeMeloPreset = if (isBilingualTts && ttsNumSpeakers <= 1) {
+                            MELO_VOICE_PRESETS.find {
+                                kotlin.math.abs(it.pitch - ttsPitch) < 0.04f && kotlin.math.abs(it.speechRate - ttsSpeechRate) < 0.05f
+                            }
+                        } else null
                         val activeSpeaker = OFFICIAL_CURATED_SPEAKERS.find { it.id == ttsSpeakerId }
-                        val speakerLabel = if (activeSpeaker != null) "${activeSpeaker.name} (${activeSpeaker.role})" else "${ttsSpeakerId} 号发音人"
+                        val speakerLabel = if (activeMeloPreset != null) {
+                            "MeloTTS · ${activeMeloPreset.name}"
+                        } else if (isBilingualTts) {
+                            "MeloTTS 自定义微调"
+                        } else if (activeSpeaker != null) {
+                            "${activeSpeaker.name} (${activeSpeaker.role})"
+                        } else {
+                            "${ttsSpeakerId} 号发音人"
+                        }
                         Button(
                             onClick = {
                                 triggerHaptic()
                                 if (isSpeaking) {
                                     speechManager.stopSpeaking()
                                 } else {
+                                    val trialText = if (activeMeloPreset?.id == "male") {
+                                        "你好！我是本地部署的 AI 大模型，沉稳男声音色测试就绪。"
+                                    } else if (activeMeloPreset?.id == "girl") {
+                                        "你好呀！我是本地部署的 AI 大模型，元气少女音色测试就绪！"
+                                    } else if (activeMeloPreset?.id == "scholar") {
+                                        "学而不思则罔，思而不学则殆。我是本地部署的 AI 大模型。"
+                                    } else if (isBilingualTts) {
+                                        "我是本地部署的 AI 大模型，随时为你解答 Python 和 Android 开发问题。"
+                                    } else {
+                                        "您好！这是当前的 ${speakerLabel} 音效测试。我正在本地离线运行。"
+                                    }
                                     speechManager.speak(
-                                        text = "您好！这是当前的 ${speakerLabel} 音效测试。我正在本地离线运行。",
+                                        text = trialText,
                                         speechRate = ttsSpeechRate,
                                         pitch = ttsPitch
                                     )

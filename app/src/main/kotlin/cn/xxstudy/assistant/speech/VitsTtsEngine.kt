@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * [VitsTtsEngine]
@@ -29,7 +29,7 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
-    private val isCancelled = AtomicBoolean(false)
+    private val currentGeneration = AtomicLong(0)
     private var tts: OfflineTts? = null
     private var sampleRate: Int = 22050
 
@@ -42,6 +42,12 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
         }
     }
 
+    private val _isBilingual = MutableStateFlow(false)
+    val isBilingual: StateFlow<Boolean> = _isBilingual.asStateFlow()
+
+    private val _numSpeakers = MutableStateFlow(1)
+    val numSpeakers: StateFlow<Int> = _numSpeakers.asStateFlow()
+
     suspend fun initEngine(): Boolean = withContext(Dispatchers.IO) {
         if (_isReady.value && tts != null) return@withContext true
 
@@ -49,24 +55,31 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
         val intFiles = context.filesDir
         val pkg = context.packageName
 
+        val modelSubdirs = listOf(
+            "models/vits-melo-tts-zh_en",
+            "vits-melo-tts-zh_en",
+            "models/vits-zh-aishell3",
+            "vits-zh-aishell3"
+        )
+
         val candidates = mutableListOf<File>()
         if (extFiles != null) {
-            candidates.add(extFiles.resolve("models/vits-zh-aishell3"))
-            candidates.add(extFiles.resolve("vits-zh-aishell3"))
+            modelSubdirs.forEach { candidates.add(extFiles.resolve(it)) }
             candidates.add(extFiles)
         }
-        candidates.add(intFiles.resolve("models/vits-zh-aishell3"))
-        candidates.add(intFiles.resolve("vits-zh-aishell3"))
+        modelSubdirs.forEach { candidates.add(intFiles.resolve(it)) }
         candidates.add(intFiles)
-        candidates.add(File("/sdcard/Android/data/$pkg/files/models/vits-zh-aishell3"))
-        candidates.add(File("/sdcard/Android/data/$pkg/files/vits-zh-aishell3"))
-        candidates.add(File("/storage/emulated/0/Android/data/$pkg/files/models/vits-zh-aishell3"))
+        modelSubdirs.forEach {
+            candidates.add(File("/sdcard/Android/data/$pkg/files/$it"))
+            candidates.add(File("/storage/emulated/0/Android/data/$pkg/files/$it"))
+        }
 
         var foundDir: File? = null
         for (dir in candidates.distinct()) {
             val modelFile = when {
-                File(dir, "vits-aishell3.int8.onnx").exists() -> File(dir, "vits-aishell3.int8.onnx")
+                File(dir, "model.onnx").exists() -> File(dir, "model.onnx")
                 File(dir, "model.int8.onnx").exists() -> File(dir, "model.int8.onnx")
+                File(dir, "vits-aishell3.int8.onnx").exists() -> File(dir, "vits-aishell3.int8.onnx")
                 File(dir, "vits-aishell3.onnx").exists() -> File(dir, "vits-aishell3.onnx")
                 else -> null
             }
@@ -88,13 +101,20 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
 
         try {
             val tStart = System.currentTimeMillis()
+            val isMelo = foundDir.name.contains("melo", ignoreCase = true) || foundDir.parentFile?.name?.contains("melo", ignoreCase = true) == true
+            _isBilingual.value = isMelo
+
             val modelFile = when {
-                File(foundDir, "vits-aishell3.int8.onnx").exists() -> File(foundDir, "vits-aishell3.int8.onnx")
+                File(foundDir, "model.onnx").exists() -> File(foundDir, "model.onnx")
                 File(foundDir, "model.int8.onnx").exists() -> File(foundDir, "model.int8.onnx")
-                else -> File(foundDir, "vits-aishell3.onnx")
+                File(foundDir, "vits-aishell3.int8.onnx").exists() -> File(foundDir, "vits-aishell3.int8.onnx")
+                File(foundDir, "vits-aishell3.onnx").exists() -> File(foundDir, "vits-aishell3.onnx")
+                else -> File(foundDir, "model.onnx")
             }
             val lexiconFile = File(foundDir, "lexicon.txt")
             val tokensFile = File(foundDir, "tokens.txt")
+            val dictDir = File(foundDir, "dict")
+            val dictDirPath = if (dictDir.exists() && dictDir.isDirectory) dictDir.absolutePath else ""
 
             val ruleFstNames = listOf("date.fst", "number.fst", "phone.fst", "new_heteronym.fst")
             val ruleFsts = ruleFstNames.map { File(foundDir, it) }
@@ -106,7 +126,7 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
                 lexicon = lexiconFile.absolutePath,
                 tokens = tokensFile.absolutePath,
                 dataDir = "",
-                dictDir = "",
+                dictDir = dictDirPath,
                 noiseScale = 0.667f,
                 noiseScaleW = 0.8f,
                 lengthScale = 1.0f
@@ -130,10 +150,12 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
             val offlineTts = OfflineTts(assetManager = null, config = ttsConfig)
             tts = offlineTts
             sampleRate = offlineTts.sampleRate()
+            val totalSpeakers = offlineTts.numSpeakers()
+            _numSpeakers.value = totalSpeakers
             _isReady.value = true
 
             val elapsed = System.currentTimeMillis() - tStart
-            Log.i(TAG, "✅ VITS TTS 引擎初始化成功: sampleRate=$sampleRate, speakers=${offlineTts.numSpeakers()}, 耗时=${elapsed}ms")
+            Log.i(TAG, "✅ VITS TTS 引擎初始化成功: isMelo=$isMelo, model=${modelFile.name}, sampleRate=$sampleRate, speakers=$totalSpeakers, dictDir=$dictDirPath, 耗时=${elapsed}ms")
             true
         } catch (e: Exception) {
             Log.e(TAG, "❌ 初始化 VITS TTS 失败: ${e.message}", e)
@@ -143,7 +165,7 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
     }
 
     fun cancelCurrent() {
-        isCancelled.set(true)
+        currentGeneration.incrementAndGet()
         _isGenerating.value = false
     }
 
@@ -162,26 +184,38 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
         val cleanText = text.trim()
         if (cleanText.isEmpty()) return@withContext
 
-        isCancelled.set(false)
+        // 分配本轮合成的唯一代际 ID
+        val thisGen = currentGeneration.incrementAndGet()
         _isGenerating.value = true
         val tStart = System.currentTimeMillis()
+        Log.d(TAG, "🎙️ 开始合成 [gen=$thisGen]: \"$cleanText\"")
 
         try {
-            val audio = engine.generate(cleanText, sid, speed)
+            val numSpk = engine.numSpeakers()
+            val effectiveSid = if (numSpk <= 1) 0 else sid.coerceIn(0, numSpk - 1)
+            val audio = engine.generate(cleanText, effectiveSid, speed)
             val elapsed = System.currentTimeMillis() - tStart
             val samples = audio.samples
             val sr = audio.sampleRate
 
-            if (samples.isNotEmpty() && !isCancelled.get()) {
+            // 严格校验：若期间发生了取消或被更新的合成取代，立即静默丢弃
+            if (currentGeneration.get() != thisGen) {
+                Log.d(TAG, "⏭️ 合成被作废丢弃: \"$cleanText\" (gen=$thisGen, latest=${currentGeneration.get()})")
+                return@withContext
+            }
+
+            if (samples.isNotEmpty()) {
                 val durationSec = samples.size.toFloat() / sr
                 val rtf = (elapsed / 1000f) / durationSec
-                Log.i(TAG, "⚡ 合成成功: \"$cleanText\" | 耗时: ${elapsed}ms | 时长: ${String.format("%.2f", durationSec)}s | RTF: ${String.format("%.3f", rtf)}")
+                Log.i(TAG, "⚡ 合成成功: \"$cleanText\" | 耗时: ${elapsed}ms | 采样率: ${sr}Hz | 时长: ${String.format("%.2f", durationSec)}s | RTF: ${String.format("%.3f", rtf)}")
                 onAudioDecoded(samples, sr)
             }
         } catch (e: Exception) {
             Log.e(TAG, "合成异常: ${e.message}", e)
         } finally {
-            _isGenerating.value = false
+            if (currentGeneration.get() == thisGen) {
+                _isGenerating.value = false
+            }
         }
     }
 

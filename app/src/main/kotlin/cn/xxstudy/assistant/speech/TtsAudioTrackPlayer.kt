@@ -44,6 +44,9 @@ class TtsAudioTrackPlayer(
     @Synchronized
     fun updatePitch(pitch: Float) {
         val clamped = pitch.coerceIn(0.5f, 2.0f)
+        if (kotlin.math.abs(clamped - currentPitch) < 0.005f) {
+            return
+        }
         currentPitch = clamped
         try {
             audioTrack?.let { track ->

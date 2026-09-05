@@ -21,13 +21,23 @@ except ImportError:
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-# 严格保留原有路径及所需模型
 TASKS = [
     {
-        "title": "VITS AISHELL-3 中文语音合成 (轻量 38MB)",
-        "repo_id": "csukuangfj/vits-zh-aishell3",
-        "local_dir": PROJECT_ROOT / "vits-zh-aishell3",
-        "allow_patterns": ["vits-aishell3.int8.onnx", "lexicon.txt", "tokens.txt", "date.fst", "number.fst", "phone.fst", "new_heteronym.fst"],
+        "title": "VITS MeloTTS 中英双语超清语音合成 (44.1kHz / 51MB INT8)",
+        "repo_id": "csukuangfj/vits-melo-tts-zh_en",
+        "local_dir": PROJECT_ROOT / "vits-melo-tts-zh_en",
+        "allow_patterns": [
+            "model.int8.onnx",
+            "model.onnx",
+            "lexicon.txt",
+            "tokens.txt",
+            "date.fst",
+            "number.fst",
+            "phone.fst",
+            "new_heteronym.fst",
+            "dict/*",
+            "dict/**/*",
+        ],
     },
     {
         "title": "SenseVoice Small INT8 (语音识别模型)",

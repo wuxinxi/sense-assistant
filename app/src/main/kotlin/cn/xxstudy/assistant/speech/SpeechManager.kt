@@ -37,10 +37,12 @@ class SpeechManager(private val context: Context) {
 
     // --- VITS-TTS 离线引擎与播放器 ---
     private val vitsEngine = VitsTtsEngine(context)
-    private val ttsPlayer = TtsAudioTrackPlayer(sampleRate = 22050)
+    private val ttsPlayer = TtsAudioTrackPlayer(sampleRate = 44100)
 
     val isVitsTtsReady: StateFlow<Boolean> = vitsEngine.isReady
     val isVitsGenerating: StateFlow<Boolean> = vitsEngine.isGenerating
+    val isBilingualTts: StateFlow<Boolean> = vitsEngine.isBilingual
+    val ttsNumSpeakers: StateFlow<Int> = vitsEngine.numSpeakers
 
     // 兼容旧属性命名
     val isMossTtsReady: StateFlow<Boolean> = isVitsTtsReady
