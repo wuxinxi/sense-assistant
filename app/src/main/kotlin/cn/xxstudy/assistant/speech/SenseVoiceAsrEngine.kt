@@ -12,6 +12,7 @@ import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
+import com.k2fsa.sherpa.onnx.OfflineStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,7 +56,8 @@ class SenseVoiceAsrEngine(private val context: Context) {
 
     private var audioRecord: AudioRecord? = null
     private var recordJob: Job? = null
-    private val recordedSamples = ArrayList<Float>()
+    private val bufferLock = Any()
+    private val sampleBuffer = PrimitiveFloatBuffer()
 
     private var onPartialCallback: ((String) -> Unit)? = null
     private var onFinalCallback: ((String) -> Unit)? = null
@@ -205,7 +207,9 @@ class SenseVoiceAsrEngine(private val context: Context) {
 
             audioRecord?.startRecording()
             _isListening.value = true
-            recordedSamples.clear()
+            synchronized(bufferLock) {
+                sampleBuffer.clear()
+            }
 
             recordJob = scope.launch(Dispatchers.IO) {
                 val buffer = ShortArray(1600) // 100ms 音频帧
@@ -213,10 +217,12 @@ class SenseVoiceAsrEngine(private val context: Context) {
                     val readCount = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                     if (readCount > 0) {
                         var sum = 0.0
-                        for (i in 0 until readCount) {
-                            val sample = buffer[i] / 32768.0f
-                            recordedSamples.add(sample)
-                            sum += (buffer[i] * buffer[i]).toDouble()
+                        synchronized(bufferLock) {
+                            for (i in 0 until readCount) {
+                                val sample = buffer[i] / 32768.0f
+                                sampleBuffer.add(sample)
+                                sum += (buffer[i] * buffer[i]).toDouble()
+                            }
                         }
                         val rms = sqrt(sum / readCount)
                         val db = if (rms > 0) (20 * log10(rms)).toFloat() else 0f
@@ -253,7 +259,9 @@ class SenseVoiceAsrEngine(private val context: Context) {
             audioRecord = null
         }
 
-        recordedSamples.clear()
+        synchronized(bufferLock) {
+            sampleBuffer.clear()
+        }
         onFinalCallback = null
         onErrorCallback = null
         Log.d(TAG, "本次语音录制已主动取消")
@@ -285,8 +293,11 @@ class SenseVoiceAsrEngine(private val context: Context) {
         onFinalCallback = null
         onErrorCallback = null
 
-        val samples = recordedSamples.toFloatArray()
-        recordedSamples.clear()
+        val samples = synchronized(bufferLock) {
+            val arr = sampleBuffer.toFloatArray()
+            sampleBuffer.clear()
+            arr
+        }
 
         val durationMs = System.currentTimeMillis() - recordingStartTime
         // 音频过短判断 (< 0.4 秒忽略，提示时间太短)
@@ -305,12 +316,13 @@ class SenseVoiceAsrEngine(private val context: Context) {
                 return@launch
             }
 
+            var stream: OfflineStream? = null
             try {
-                val stream = rec.createStream()
-                stream.acceptWaveform(samples, SAMPLE_RATE)
-                rec.decode(stream)
-                val result = rec.getResult(stream)
-                stream.release()
+                val s = rec.createStream()
+                stream = s
+                s.acceptWaveform(samples, SAMPLE_RATE)
+                rec.decode(s)
+                val result = rec.getResult(s)
 
                 val cleanText = cleanSenseVoiceOutput(result.text)
                 Log.i(TAG, "SenseVoice 识别结果: 原文='${result.text}', 清洗后='$cleanText'")
@@ -326,6 +338,12 @@ class SenseVoiceAsrEngine(private val context: Context) {
                 Log.e(TAG, "SenseVoice 解码异常", e)
                 withContext(Dispatchers.Main) {
                     onError?.invoke("语音解码错误: ${e.message}")
+                }
+            } finally {
+                try {
+                    stream?.release()
+                } catch (e: Throwable) {
+                    Log.w(TAG, "释放 OfflineStream 异常: ${e.message}")
                 }
             }
         }
@@ -346,5 +364,28 @@ class SenseVoiceAsrEngine(private val context: Context) {
         recognizer?.release()
         recognizer = null
         isEngineReady = false
+    }
+}
+
+/**
+ * 高性能原生浮点动态缓冲池，消除 Float 自动装箱与频繁 GC 顿挫
+ */
+private class PrimitiveFloatBuffer(initialCapacity: Int = 16000 * 5) {
+    private var data = FloatArray(initialCapacity)
+    var size = 0
+        private set
+
+    fun add(value: Float) {
+        if (size >= data.size) {
+            val newCap = if (data.size < 1024 * 1024) data.size * 2 else data.size + (data.size shr 1)
+            data = data.copyOf(newCap)
+        }
+        data[size++] = value
+    }
+
+    fun toFloatArray(): FloatArray = data.copyOf(size)
+
+    fun clear() {
+        size = 0
     }
 }
