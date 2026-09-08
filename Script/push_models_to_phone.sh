@@ -32,6 +32,28 @@ fi
 
 echo "✅ 已连接 $DEVICE_COUNT 台设备。"
 
+# 获取本地文件真实字节大小（处理 macOS 与 Linux 差异，并追踪软链接）
+get_local_file_size() {
+    local target="$1"
+    if [ "$(uname)" = "Darwin" ]; then
+        stat -L -f %z "$target" 2>/dev/null || stat -f %z "$target" 2>/dev/null
+    else
+        stat -L -c %s "$target" 2>/dev/null || stat -c %s "$target" 2>/dev/null
+    fi
+}
+
+# 获取远端 Android 文件字节大小
+get_remote_file_size() {
+    local remote_path="$1"
+    local size
+    size=$(adb shell "stat -c %s '$remote_path' 2>/dev/null" 2>/dev/null | tr -d '\r\n[:space:]')
+    if [[ "$size" =~ ^[0-9]+$ ]]; then
+        echo "$size"
+    else
+        echo "0"
+    fi
+}
+
 # 3. 创建目标沙盒目录（无需 root 权限）
 echo "📁 正在创建应用私有沙盒目录..."
 adb shell "mkdir -p $TARGET_DIR"
@@ -39,9 +61,18 @@ adb shell "mkdir -p $TARGET_DIR"
 # 4. 推送 SenseVoice ASR 模型
 SENSE_VOICE_DIR="$PROJECT_ROOT/sense-voice-int8"
 if [ -d "$SENSE_VOICE_DIR" ] && [ -f "$SENSE_VOICE_DIR/model.int8.onnx" ] && [ -f "$SENSE_VOICE_DIR/tokens.txt" ]; then
-    echo "🚀 正在推送 SenseVoice 离线语音识别模型到手机..."
-    adb push "$SENSE_VOICE_DIR" "$TARGET_DIR/"
-    echo "✅ SenseVoice 模型推送完成！"
+    LOCAL_ONNX_SIZE=$(get_local_file_size "$SENSE_VOICE_DIR/model.int8.onnx")
+    REMOTE_ONNX_SIZE=$(get_remote_file_size "$TARGET_DIR/sense-voice-int8/model.int8.onnx")
+    LOCAL_TOKENS_SIZE=$(get_local_file_size "$SENSE_VOICE_DIR/tokens.txt")
+    REMOTE_TOKENS_SIZE=$(get_remote_file_size "$TARGET_DIR/sense-voice-int8/tokens.txt")
+
+    if [ "$REMOTE_ONNX_SIZE" = "$LOCAL_ONNX_SIZE" ] && [ "$REMOTE_TOKENS_SIZE" = "$LOCAL_TOKENS_SIZE" ]; then
+        echo "⚡ 远端已存在完整 SenseVoice 模型 ($((LOCAL_ONNX_SIZE / 1024 / 1024))MB)，大小一致，跳过推送。"
+    else
+        echo "🚀 正在推送 SenseVoice 离线语音识别模型到手机..."
+        adb push "$SENSE_VOICE_DIR" "$TARGET_DIR/"
+        echo "✅ SenseVoice 模型推送完成！"
+    fi
 else
     echo "⚠️ 未在本地检测到完整的 sense-voice-int8 模型，请先运行: bash Script/download_all.sh"
 fi
@@ -68,6 +99,30 @@ if [ -n "$QWEN_GGUF" ] && [ -f "$QWEN_GGUF" ]; then
     adb push "$QWEN_GGUF" "/sdcard/Android/data/${PACKAGE_NAME}/files/"
     echo "✅ LLM 模型推送完成！"
 fi
+# 5. 推送 LLM 大语言模型权重（自动识别 Qwen 与 MiniCPM5 等所有 GGUF 模型，带字节级比对校验）
+find "$PROJECT_ROOT" -maxdepth 2 -name "*.gguf" | while read -r GGUF_FILE; do
+    if [ -n "$GGUF_FILE" ] && [ -f "$GGUF_FILE" ]; then
+        FILE_NAME="$(basename "$GGUF_FILE")"
+        LOCAL_SIZE=$(get_local_file_size "$GGUF_FILE")
+        REMOTE_FILE="/sdcard/Android/data/${PACKAGE_NAME}/files/${FILE_NAME}"
+        REMOTE_SIZE=$(get_remote_file_size "$REMOTE_FILE")
+
+        LOCAL_MB=$((LOCAL_SIZE / 1024 / 1024))
+        REMOTE_MB=$((REMOTE_SIZE / 1024 / 1024))
+
+        if [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ] && [ "$LOCAL_SIZE" -gt 0 ]; then
+            echo "⚡ 远端已存在完整模型 $FILE_NAME (${REMOTE_MB}MB / ${LOCAL_SIZE} 字节)，大小一致，跳过推送。"
+        else
+            if [ "$REMOTE_SIZE" -gt 0 ]; then
+                echo "🔄 远端模型 $FILE_NAME 不完整 (远端: ${REMOTE_MB}MB, 本地: ${LOCAL_MB}MB)，开始重新推送..."
+            else
+                echo "🚀 正在推送大模型: $FILE_NAME (${LOCAL_MB}MB) 到手机..."
+            fi
+            adb push "$GGUF_FILE" "/sdcard/Android/data/${PACKAGE_NAME}/files/"
+            echo "✅ 模型 $FILE_NAME 推送完成！"
+        fi
+    fi
+done
 
 # 7. 关键：修复 Android Linux 权限，确保 App 独立 UID 进程拥有完整读取和进入权限
 echo "🛡️ 正在授予应用私有沙盒完整读写权限..."

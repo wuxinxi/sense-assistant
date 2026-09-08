@@ -32,6 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.xxstudy.assistant.data.AppSettings
 import cn.xxstudy.assistant.data.ColorTheme
+import cn.xxstudy.assistant.data.ModelFileStatus
+import cn.xxstudy.assistant.data.ModelType
 import cn.xxstudy.assistant.data.ThemeMode
 import cn.xxstudy.assistant.speech.SpeechManager
 import kotlin.math.roundToInt
@@ -128,6 +130,8 @@ fun SettingsScreen(
     val ttsAutoPlay by AppSettings.ttsAutoPlay.collectAsState()
     val ttsSpeechRate by AppSettings.ttsSpeechRate.collectAsState()
     val ttsPitch by AppSettings.ttsPitch.collectAsState()
+    val currentModel by AppSettings.currentModelType.collectAsState()
+    val enableThinking by AppSettings.enableThinking.collectAsState()
     val ttsSpeakerId by AppSettings.ttsSpeakerId.collectAsState()
     val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
     val localServerEnabled by AppSettings.localServerEnabled.collectAsState()
@@ -137,6 +141,7 @@ fun SettingsScreen(
     val ttsNumSpeakers by speechManager.ttsNumSpeakers.collectAsState()
 
     // Dialog 状态控制
+    var showModelSelectDialog by remember { mutableStateOf(false) }
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
     var showCreditsDialog by remember { mutableStateOf(false) }
@@ -710,16 +715,55 @@ fun SettingsScreen(
             }
 
             // ========================================================
-            // 模块 2: 端侧模型与计算底座
+            // 模块 2: 端侧大语言模型 (LLM) 与推理底座
             // ========================================================
-            SettingSectionGroup(title = "端侧模型与计算底座") {
+            SettingSectionGroup(title = "端侧大语言模型 (LLM) 与推理底座") {
+                val currentCheck = AppSettings.checkModelFile(context, currentModel)
                 SettingItemRow(
                     icon = Icons.Default.Memory,
                     iconBgColor = Color(0xFF673AB7),
-                    title = "大语言模型 (LLM)",
-                    subtitle = "Qwen2.5-0.5B-Instruct (Q4_K_M)",
+                    title = "当前运行大模型",
+                    subtitle = when (currentCheck.status) {
+                        ModelFileStatus.READY -> "${currentModel.displayName} (${currentModel.parameterSize})"
+                        ModelFileStatus.INCOMPLETE -> "${currentModel.displayName} (写入中 ${currentCheck.currentBytes / 1024 / 1024}MB / ${currentCheck.expectedBytes / 1024 / 1024}MB)"
+                        ModelFileStatus.MISSING -> "${currentModel.displayName} (待导入)"
+                    },
                     trailing = {
-                        SettingTagBadge(text = "ARMv8.2-A", isSuccess = true)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            when (currentCheck.status) {
+                                ModelFileStatus.READY -> SettingTagBadge(text = "已就绪", isSuccess = true)
+                                ModelFileStatus.INCOMPLETE -> SettingTagBadge(
+                                    text = "传输中 ${currentCheck.progressPercent}%",
+                                    isWarning = true
+                                )
+                                ModelFileStatus.MISSING -> SettingTagBadge(text = "待导入", isSuccess = false)
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+                        }
+                    },
+                    onClick = {
+                        triggerHaptic()
+                        showModelSelectDialog = true
+                    }
+                )
+
+                SettingRowDivider()
+
+                SettingItemRow(
+                    icon = Icons.Default.Psychology,
+                    iconBgColor = Color(0xFFE91E63),
+                    title = "深度思考模式 (Thinking)",
+                    subtitle = if (currentModel.supportsThinking) "展示思维链折叠卡片 (<|thought_begin|>)" else "当前模型不支持思维链思考",
+                    trailing = {
+                        Switch(
+                            checked = enableThinking && currentModel.supportsThinking,
+                            enabled = currentModel.supportsThinking,
+                            onCheckedChange = {
+                                triggerHaptic()
+                                AppSettings.setEnableThinking(it)
+                            }
+                        )
                     }
                 )
 
@@ -965,6 +1009,137 @@ fun SettingsScreen(
     }
 
     // ============================================================
+    // 弹窗 0: 大语言模型选择器
+    // ============================================================
+    if (showModelSelectDialog) {
+        val models = cn.xxstudy.assistant.data.ModelType.values()
+        AlertDialog(
+            onDismissRequest = { showModelSelectDialog = false },
+            title = { Text("选择端侧大语言模型", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "切换模型后将在下一次对话或启动时自动装载。请确保权重文件已推送到应用私有沙盒目录中。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    models.forEach { model ->
+                        val check = AppSettings.checkModelFile(context, model)
+                        val isSelected = (model == currentModel)
+                        Card(
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    triggerHaptic()
+                                    when (check.status) {
+                                        ModelFileStatus.READY -> {
+                                            AppSettings.setCurrentModelType(model)
+                                            showModelSelectDialog = false
+                                            Toast.makeText(context, "已切换为 ${model.displayName}", Toast.LENGTH_SHORT).show()
+                                        }
+                                        ModelFileStatus.INCOMPLETE -> {
+                                            Toast.makeText(context, "⚠️ ${model.displayName} 正在写入中 (${check.currentBytes / 1024 / 1024}MB / ${check.expectedBytes / 1024 / 1024}MB - ${check.progressPercent}%)，请等待传输完成", Toast.LENGTH_LONG).show()
+                                        }
+                                        ModelFileStatus.MISSING -> {
+                                            Toast.makeText(context, "提示：本地尚未找到 ${model.fileName}，请通过脚本推送到手机", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isSelected,
+                                    onClick = {
+                                        triggerHaptic()
+                                        when (check.status) {
+                                            ModelFileStatus.READY -> {
+                                                AppSettings.setCurrentModelType(model)
+                                                showModelSelectDialog = false
+                                                Toast.makeText(context, "已切换为 ${model.displayName}", Toast.LENGTH_SHORT).show()
+                                            }
+                                            ModelFileStatus.INCOMPLETE -> {
+                                                Toast.makeText(context, "⚠️ ${model.displayName} 正在写入中 (${check.progressPercent}%)，请等待传输完成", Toast.LENGTH_LONG).show()
+                                            }
+                                            ModelFileStatus.MISSING -> {
+                                                Toast.makeText(context, "提示：本地尚未找到 ${model.fileName}，请通过脚本推送到手机", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = model.displayName,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = model.description,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        val (badgeDotColor, badgeTextColor, badgeLabel) = when (check.status) {
+                                            ModelFileStatus.READY -> Triple(
+                                                Color(0xFF4CAF50),
+                                                Color(0xFF2E7D32),
+                                                "已就绪 (${model.parameterSize})"
+                                            )
+                                            ModelFileStatus.INCOMPLETE -> Triple(
+                                                Color(0xFFFF9800),
+                                                Color(0xFFE65100),
+                                                "写入中 ${check.currentBytes / 1024 / 1024}MB / ${check.expectedBytes / 1024 / 1024}MB (${check.progressPercent}%)"
+                                            )
+                                            ModelFileStatus.MISSING -> Triple(
+                                                Color(0xFFE53935),
+                                                Color(0xFFE53935),
+                                                "待导入 (${model.fileName})"
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(badgeDotColor)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = badgeLabel,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = badgeTextColor
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showModelSelectDialog = false }) {
+                    Text("完成")
+                }
+            }
+        )
+    }
+
+    // ============================================================
     // 弹窗 1: 语音偏好语言选择器
     // ============================================================
     if (showLanguageDialog) {
@@ -1181,10 +1356,19 @@ fun SettingRowDivider() {
 @Composable
 fun SettingTagBadge(
     text: String,
-    isSuccess: Boolean = true
+    isSuccess: Boolean = true,
+    isWarning: Boolean = false
 ) {
-    val bgColor = if (isSuccess) Color(0xFF4CAF50).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant
-    val textColor = if (isSuccess) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
+    val bgColor = when {
+        isWarning -> Color(0xFFFF9800).copy(alpha = 0.15f)
+        isSuccess -> Color(0xFF4CAF50).copy(alpha = 0.15f)
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val textColor = when {
+        isWarning -> Color(0xFFE65100)
+        isSuccess -> Color(0xFF2E7D32)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
     Box(
         modifier = Modifier

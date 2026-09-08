@@ -24,6 +24,8 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import cn.xxstudy.assistant.data.AppSettings
+import cn.xxstudy.assistant.data.ModelFileStatus
+import cn.xxstudy.assistant.data.ModelType
 import cn.xxstudy.assistant.ui.components.ChatBubble
 import cn.xxstudy.assistant.ui.components.DoubaoInputBar
 import cn.xxstudy.assistant.ui.components.DoubaoVoicePanel
@@ -57,17 +59,17 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     // 自动探测并预热本地大模型引擎
     LaunchedEffect(Unit) {
         if (!isModelLoaded && !isLoading) {
-            val internalFile = File(context.filesDir, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
-            val externalFile = File(context.getExternalFilesDir(null), "qwen2.5-0.5b-instruct-q4_k_m.gguf")
-            val sdcardFile = File("/sdcard/Android/data/cn.xxstudy.assistant/files/qwen2.5-0.5b-instruct-q4_k_m.gguf")
-            val targetPath = when {
-                internalFile.exists() -> internalFile.absolutePath
-                externalFile.exists() -> externalFile.absolutePath
-                sdcardFile.exists() -> sdcardFile.absolutePath
-                else -> null
-            }
-            if (targetPath != null) {
-                viewModel.loadLocalModel(targetPath)
+            val preferredModel = AppSettings.currentModelType.value
+            val primaryCheck = AppSettings.checkModelFile(context, preferredModel)
+            if (primaryCheck.status == ModelFileStatus.READY && primaryCheck.file != null) {
+                viewModel.loadLocalModel(primaryCheck.file.absolutePath, preferredModel)
+            } else {
+                val fallbackModel = if (preferredModel == ModelType.MINICPM5_2B) ModelType.QWEN_0_5B else ModelType.MINICPM5_2B
+                val fallbackCheck = AppSettings.checkModelFile(context, fallbackModel)
+                if (fallbackCheck.status == ModelFileStatus.READY && fallbackCheck.file != null) {
+                    AppSettings.setCurrentModelType(fallbackModel)
+                    viewModel.loadLocalModel(fallbackCheck.file.absolutePath, fallbackModel)
+                }
             }
         }
     }
@@ -96,10 +98,10 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    // 自动滚动控制：仅在用户未用手指触摸滑动、且视口正停留在底部时跟随最新字数
-    LaunchedEffect(chatMessages.size, chatMessages.lastOrNull()?.text?.length) {
-        if (chatMessages.isNotEmpty() && !listState.isScrollInProgress && isAtBottom) {
-            listState.scrollToItem(chatMessages.size - 1)
+    // 监听消息列表新增或更新：仅在用户本就在底部时自动滚到底部，绝不干扰用户向上翻看历史
+    LaunchedEffect(chatMessages.size, chatMessages.lastOrNull()?.text, chatMessages.lastOrNull()?.thinkingText) {
+        if (chatMessages.isNotEmpty() && isAtBottom) {
+            listState.animateScrollToItem(chatMessages.size - 1)
         }
     }
 
@@ -115,7 +117,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -137,14 +139,23 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 if (!isModelLoaded) {
                     Button(
                         onClick = {
-                            val internalFile = File(context.filesDir, "qwen2.5-0.5b-instruct-q4_k_m.gguf")
-                            val externalFile = File(context.getExternalFilesDir(null), "qwen2.5-0.5b-instruct-q4_k_m.gguf")
-                            val targetPath = when {
-                                internalFile.exists() -> internalFile.absolutePath
-                                externalFile.exists() -> externalFile.absolutePath
-                                else -> "/sdcard/Android/data/cn.xxstudy.assistant/files/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+                            val currentModel = AppSettings.currentModelType.value
+                            val check = AppSettings.checkModelFile(context, currentModel)
+                            if (check.status == ModelFileStatus.READY && check.file != null) {
+                                viewModel.loadLocalModel(check.file.absolutePath, currentModel)
+                            } else if (check.status == ModelFileStatus.INCOMPLETE) {
+                                Toast.makeText(context, "⚠️ ${currentModel.displayName} 正在写入中 (${check.currentBytes / 1024 / 1024}MB / ${check.expectedBytes / 1024 / 1024}MB - ${check.progressPercent}%)，请等待传输完成", Toast.LENGTH_LONG).show()
+                            } else {
+                                val fallbackModel = if (currentModel == ModelType.MINICPM5_2B) ModelType.QWEN_0_5B else ModelType.MINICPM5_2B
+                                val fallbackCheck = AppSettings.checkModelFile(context, fallbackModel)
+                                if (fallbackCheck.status == ModelFileStatus.READY && fallbackCheck.file != null) {
+                                    AppSettings.setCurrentModelType(fallbackModel)
+                                    viewModel.loadLocalModel(fallbackCheck.file.absolutePath, fallbackModel)
+                                    Toast.makeText(context, "${currentModel.displayName} 未就绪，已切换为备用模型 ${fallbackModel.displayName}", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "未找到完整的模型文件，请前往【设置】或通过脚本推送", Toast.LENGTH_LONG).show()
+                                }
                             }
-                            viewModel.loadLocalModel(targetPath)
                         },
                         enabled = !isLoading,
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
@@ -173,7 +184,8 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     ChatBubble(
                         msg = msg,
                         isSpeakingThis = (speakingMessageId == msg.id),
-                        onSpeakClick = { viewModel.speakMessage(msg.id, msg.text) }
+                        onSpeakClick = { viewModel.speakMessage(msg.id, msg.text) },
+                        onToggleThinkingCollapsed = { viewModel.toggleThinkingCollapsed(msg.id) }
                     )
                 }
             }

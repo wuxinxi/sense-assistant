@@ -125,13 +125,19 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     const char *prompt_cstr = env->GetStringUTFChars(prompt, nullptr);
     LOGI("Received prompt: %s", prompt_cstr);
     
-    // 1. 组装 Qwen2.5 专属 Chat Template
-    std::string qwen_prompt = "<|im_start|>user\n" + std::string(prompt_cstr) + "<|im_end|>\n<|im_start|>assistant\n";
+    // 1. 组装 Chat Template（若上层已包装则直接使用，否则以标准 ChatML 格式包裹）
+    std::string prompt_str(prompt_cstr);
+    std::string final_prompt;
+    if (prompt_str.find("<|im_start|>") != std::string::npos) {
+        final_prompt = prompt_str;
+    } else {
+        final_prompt = "<|im_start|>user\n" + prompt_str + "<|im_end|>\n<|im_start|>assistant\n";
+    }
     
     // 2. Tokenize
     const struct llama_vocab * vocab = llama_model_get_vocab(g_model);
-    std::vector<llama_token> tokens(qwen_prompt.length() + 100);
-    int n_tokens = llama_tokenize(vocab, qwen_prompt.c_str(), qwen_prompt.length(), tokens.data(), tokens.size(), true, true);
+    std::vector<llama_token> tokens(final_prompt.length() + 100);
+    int n_tokens = llama_tokenize(vocab, final_prompt.c_str(), final_prompt.length(), tokens.data(), tokens.size(), true, true);
     if (n_tokens < 0) {
         env->ReleaseStringUTFChars(prompt, prompt_cstr);
         return env->NewStringUTF("Error: Prompt too long.");
@@ -151,14 +157,17 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
         return env->NewStringUTF("Error: llama_decode failed.");
     }
 
-    // 4. 初始化采样器 (贪婪采样，最快返回)
+    // 4. 初始化采样器 (支持温度与 Top-P，同时保留确定性分布)
     auto sparams = llama_sampler_chain_default_params();
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
-    llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.95f, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
     
     std::string response = "";
     std::string token_stream_buf = "";
-    int max_predict = 256; 
+    int max_predict = 1536; // 放宽最大步数至 1536，完整承载 MiniCPM5 深度思考链与长文本回答
     
     bool is_first_token = true;
     long long ttft_ms = 0;
@@ -188,9 +197,9 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
             break; 
         }
         
-        // Token 转文字
+        // Token 转文字 (special 设置为 true，使得 <|thought_begin|> 等思考标记能作为文本输出供上层状态机捕获)
         char buf[128];
-        int n_chars = llama_token_to_piece(vocab, id, buf, sizeof(buf), 0, false);
+        int n_chars = llama_token_to_piece(vocab, id, buf, sizeof(buf), 0, true);
         if (n_chars > 0) {
             response.append(buf, n_chars);
             token_stream_buf.append(buf, n_chars);
