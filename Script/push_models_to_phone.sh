@@ -46,7 +46,7 @@ get_local_file_size() {
 get_remote_file_size() {
     local remote_path="$1"
     local size
-    size=$(adb shell "stat -c %s '$remote_path' 2>/dev/null" 2>/dev/null | tr -d '\r\n[:space:]')
+    size=$(adb shell "stat -c %s '$remote_path' 2>/dev/null" < /dev/null 2>/dev/null | tr -d '\r\n[:space:]')
     if [[ "$size" =~ ^[0-9]+$ ]]; then
         echo "$size"
     else
@@ -81,53 +81,70 @@ fi
 MELO_TTS_DIR="$PROJECT_ROOT/vits-melo-tts-zh_en"
 VITS_TTS_DIR="$PROJECT_ROOT/vits-zh-aishell3"
 if [ -d "$MELO_TTS_DIR" ] && { [ -f "$MELO_TTS_DIR/model.int8.onnx" ] || [ -f "$MELO_TTS_DIR/model.onnx" ]; }; then
-    echo "🚀 正在推送 VITS MeloTTS (44.1kHz 中英双语超清) 离线语音合成模型到手机..."
-    adb push "$MELO_TTS_DIR" "$TARGET_DIR/"
-    echo "✅ VITS MeloTTS 模型推送完成！"
+    MELO_MODEL_FILE="$MELO_TTS_DIR/model.int8.onnx"
+    [ ! -f "$MELO_MODEL_FILE" ] && MELO_MODEL_FILE="$MELO_TTS_DIR/model.onnx"
+    LOCAL_MELO_SIZE=$(get_local_file_size "$MELO_MODEL_FILE")
+    REMOTE_MELO_SIZE=$(get_remote_file_size "$TARGET_DIR/vits-melo-tts-zh_en/$(basename "$MELO_MODEL_FILE")")
+
+    if [ "$REMOTE_MELO_SIZE" = "$LOCAL_MELO_SIZE" ] && [ "$LOCAL_MELO_SIZE" -gt 0 ]; then
+        echo "⚡ 远端已存在完整 VITS MeloTTS 模型 ($((LOCAL_MELO_SIZE / 1024 / 1024))MB)，大小一致，跳过推送。"
+    else
+        echo "🚀 正在推送 VITS MeloTTS (44.1kHz 中英双语超清) 离线语音合成模型到手机..."
+        adb push "$MELO_TTS_DIR" "$TARGET_DIR/"
+        echo "✅ VITS MeloTTS 模型推送完成！"
+    fi
 elif [ -d "$VITS_TTS_DIR" ] && [ -f "$VITS_TTS_DIR/vits-aishell3.int8.onnx" ]; then
-    echo "🚀 正在推送备用 VITS AISHELL-3 离线语音合成模型到手机..."
-    adb push "$VITS_TTS_DIR" "$TARGET_DIR/"
-    echo "✅ VITS-TTS 模型推送完成！"
+    LOCAL_VITS_SIZE=$(get_local_file_size "$VITS_TTS_DIR/vits-aishell3.int8.onnx")
+    REMOTE_VITS_SIZE=$(get_remote_file_size "$TARGET_DIR/vits-zh-aishell3/vits-aishell3.int8.onnx")
+    if [ "$REMOTE_VITS_SIZE" = "$LOCAL_VITS_SIZE" ] && [ "$LOCAL_VITS_SIZE" -gt 0 ]; then
+        echo "⚡ 远端已存在完整 VITS AISHELL-3 模型 ($((LOCAL_VITS_SIZE / 1024 / 1024))MB)，大小一致，跳过推送。"
+    else
+        echo "🚀 正在推送备用 VITS AISHELL-3 离线语音合成模型到手机..."
+        adb push "$VITS_TTS_DIR" "$TARGET_DIR/"
+        echo "✅ VITS-TTS 模型推送完成！"
+    fi
 else
     echo "⚠️ 未在本地检测到完整的 TTS 模型，请先运行: python3 Script/download_models.py"
 fi
 
-# 6. 推送 Qwen 大模型（若存在）
-QWEN_GGUF=$(find "$PROJECT_ROOT" -maxdepth 2 -name "*qwen*.gguf" | head -n 1)
-if [ -n "$QWEN_GGUF" ] && [ -f "$QWEN_GGUF" ]; then
-    echo "🚀 正在推送 LLM 大模型权重: $(basename "$QWEN_GGUF") ..."
-    adb push "$QWEN_GGUF" "/sdcard/Android/data/${PACKAGE_NAME}/files/"
-    echo "✅ LLM 模型推送完成！"
-fi
-# 5. 推送 LLM 大语言模型权重（自动识别 Qwen 与 MiniCPM5 等所有 GGUF 模型，带字节级比对校验）
-find "$PROJECT_ROOT" -maxdepth 2 -name "*.gguf" | while read -r GGUF_FILE; do
-    if [ -n "$GGUF_FILE" ] && [ -f "$GGUF_FILE" ]; then
-        FILE_NAME="$(basename "$GGUF_FILE")"
-        LOCAL_SIZE=$(get_local_file_size "$GGUF_FILE")
-        REMOTE_FILE="/sdcard/Android/data/${PACKAGE_NAME}/files/${FILE_NAME}"
-        REMOTE_SIZE=$(get_remote_file_size "$REMOTE_FILE")
+# 6. 推送 LLM 大语言模型权重（自动识别 Qwen 与 MiniCPM5 等所有 GGUF 模型，带字节级比对校验）
+GGUF_FILES=()
+while IFS= read -r file; do
+    [ -n "$file" ] && GGUF_FILES+=("$file")
+done < <(find "$PROJECT_ROOT" -maxdepth 2 -name "*.gguf")
 
-        LOCAL_MB=$((LOCAL_SIZE / 1024 / 1024))
-        REMOTE_MB=$((REMOTE_SIZE / 1024 / 1024))
+if [ ${#GGUF_FILES[@]} -eq 0 ]; then
+    echo "⚠️ 未在本地检测到任何 .gguf 模型文件。"
+else
+    for GGUF_FILE in "${GGUF_FILES[@]}"; do
+        if [ -f "$GGUF_FILE" ]; then
+            FILE_NAME="$(basename "$GGUF_FILE")"
+            LOCAL_SIZE=$(get_local_file_size "$GGUF_FILE")
+            REMOTE_FILE="/sdcard/Android/data/${PACKAGE_NAME}/files/${FILE_NAME}"
+            REMOTE_SIZE=$(get_remote_file_size "$REMOTE_FILE")
 
-        if [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ] && [ "$LOCAL_SIZE" -gt 0 ]; then
-            echo "⚡ 远端已存在完整模型 $FILE_NAME (${REMOTE_MB}MB / ${LOCAL_SIZE} 字节)，大小一致，跳过推送。"
-        else
-            if [ "$REMOTE_SIZE" -gt 0 ]; then
-                echo "🔄 远端模型 $FILE_NAME 不完整 (远端: ${REMOTE_MB}MB, 本地: ${LOCAL_MB}MB)，开始重新推送..."
+            LOCAL_MB=$((LOCAL_SIZE / 1024 / 1024))
+            REMOTE_MB=$((REMOTE_SIZE / 1024 / 1024))
+
+            if [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ] && [ "$LOCAL_SIZE" -gt 0 ]; then
+                echo "⚡ 远端已存在完整模型 $FILE_NAME (${REMOTE_MB}MB / ${LOCAL_SIZE} 字节)，大小一致，跳过推送。"
             else
-                echo "🚀 正在推送大模型: $FILE_NAME (${LOCAL_MB}MB) 到手机..."
+                if [ "$REMOTE_SIZE" -gt 0 ]; then
+                    echo "🔄 远端模型 $FILE_NAME 不完整 (远端: ${REMOTE_MB}MB, 本地: ${LOCAL_MB}MB)，开始重新推送..."
+                else
+                    echo "🚀 正在推送大模型: $FILE_NAME (${LOCAL_MB}MB) 到手机..."
+                fi
+                adb push "$GGUF_FILE" "/sdcard/Android/data/${PACKAGE_NAME}/files/"
+                echo "✅ 模型 $FILE_NAME 推送完成！"
             fi
-            adb push "$GGUF_FILE" "/sdcard/Android/data/${PACKAGE_NAME}/files/"
-            echo "✅ 模型 $FILE_NAME 推送完成！"
         fi
-    fi
-done
+    done
+fi
 
 # 7. 关键：修复 Android Linux 权限，确保 App 独立 UID 进程拥有完整读取和进入权限
 echo "🛡️ 正在授予应用私有沙盒完整读写权限..."
-adb shell "chmod -R 777 $TARGET_DIR 2>/dev/null || true"
+adb shell "chmod -R 777 /sdcard/Android/data/${PACKAGE_NAME}/files/ 2>/dev/null || true"
 
 echo "============================================================"
-echo "🎉 所有模型推送与权限配置完毕！可以在手机上打开 App 体验纯离线语音识别了。"
+echo "🎉 所有模型推送与权限配置完毕！可以在手机上打开 App 体验纯离线语音与大模型交互了。"
 echo "============================================================"

@@ -187,6 +187,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 prompt
             }
 
+            // 初始化 TTS 流式切句器（仅当开启答案语音朗读时）
+            var chunker: cn.xxstudy.assistant.speech.SentenceChunker? = null
+            if (AppSettings.ttsAutoPlay.value) {
+                chunker = speechManager.createSentenceChunker()
+                _speakingMessageId.value = thinkingId
+                // 核心安全绑定：仅在思维链解析器识别出真正的回答正文 (Answer) 时，才送入流式切句器合成语音！
+                // 彻底隔绝 <|thought_begin|> 以及所有内部思考过程，绝不朗读 AI 内心独白
+                parser.onAnswerChunk = { answerChunk ->
+                    chunker.onToken(answerChunk)
+                }
+            }
+
             // 使用无界 Channel 将 C++ 的回调与 UI 渲染彻底解耦，防止 UI 渲染过慢反向阻塞 JNI 推理线程
             val channel = kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.UNLIMITED)
 
@@ -216,27 +228,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
-                var chunker: cn.xxstudy.assistant.speech.SentenceChunker? = null
-                if (cn.xxstudy.assistant.data.AppSettings.ttsAutoPlay.value) {
-                    chunker = speechManager.createSentenceChunker()
-                    _speakingMessageId.value = thinkingId
-                }
-
                 // 调用带有打断检测的推理方法
                 val rawResponse = repository.generateText(finalPrompt) { token ->
                     channel.trySend(token)
-                    chunker?.onToken(token)
                 }
-
-                chunker?.flush()
 
                 // 推理结束，关闭 channel 并等待 UI 刷新完最后一批字符
                 channel.close()
                 uiUpdaterJob.join()
 
-                // 推理彻底结束，通知解析器收口
+                // 推理彻底结束，通知解析器收口（触发 pending 中残留的 answerChunk）
                 parser.finish()
                 val finalSnapshot = parser.getSnapshot()
+
+                // 冲刷切句器完成最后一句流式播报
+                chunker?.flush()
 
                 // 推理完成后，附加上最终的性能指标
                 val parts = rawResponse.split("<|metrics|>")
@@ -269,14 +275,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _chatMessages.value = finalUpdatedList
 
-                // 检查设置：如果开启了自动朗读，且正文非空，则自动调用 TTS 播报（仅朗读回答正文，绝不播报思考过程！）
-                if (AppSettings.ttsAutoPlay.value && actualText.isNotBlank() && actualText != "（回复为空）") {
+                // 注意：在流式生成期间，chunker 已经实时切句并完成了回答正文的播报。
+                // 只有在没有使用流式 chunker 的兜底情况下才整句播报，避免回答被重复朗读第二遍
+                if (chunker == null && AppSettings.ttsAutoPlay.value && actualText.isNotBlank() && actualText != "（回复为空）") {
                     speakMessage(thinkingId, actualText)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // 收到新消息打断时，安全退出
+                // 收到新消息打断时，安全退出并停止当前朗读
                 channel.close()
                 uiUpdaterJob.cancel()
+                speechManager.stopSpeaking()
+                _speakingMessageId.value = null
             } finally {
                 if (currentThinkingId == thinkingId) {
                     currentThinkingId = null

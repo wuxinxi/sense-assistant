@@ -33,6 +33,12 @@ class ThinkingStreamParser {
     private var isThinkingActive = false
 
     /**
+     * 仅当正式回答 (Answer) 内容流出时触发的回调
+     * 核心作用：彻底隔绝思考链（Thinking），专门供语音合成（TTS）或文本切句器消费
+     */
+    var onAnswerChunk: ((String) -> Unit)? = null
+
+    /**
      * 传入新的 Token 片段并驱动状态机更新
      */
     @Synchronized
@@ -77,6 +83,7 @@ class ThinkingStreamParser {
                 hasFinishedThinking = true
                 isThinkingActive = false
                 answerBuffer.append(pendingStr)
+                onAnswerChunk?.invoke(pendingStr)
                 pendingBuffer.clear()
             }
             return
@@ -111,6 +118,7 @@ class ThinkingStreamParser {
                 val cleanAnswer = afterTag.trimStart('\r', '\n')
                 if (cleanAnswer.isNotEmpty()) {
                     answerBuffer.append(cleanAnswer)
+                    onAnswerChunk?.invoke(cleanAnswer)
                 }
                 return
             }
@@ -138,6 +146,7 @@ class ThinkingStreamParser {
 
         // 思考已完成，所有后续字符直接流入正式回答
         answerBuffer.append(token)
+        onAnswerChunk?.invoke(token)
     }
 
     /**
@@ -152,6 +161,7 @@ class ThinkingStreamParser {
                 thinkingBuffer.append(leftover)
             } else {
                 answerBuffer.append(leftover)
+                onAnswerChunk?.invoke(leftover)
             }
         }
         isThinkingActive = false
