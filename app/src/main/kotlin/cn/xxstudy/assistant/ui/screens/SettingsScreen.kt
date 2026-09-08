@@ -117,6 +117,7 @@ val OFFICIAL_CURATED_SPEAKERS = listOf(
 @Composable
 fun SettingsScreen(
     speechManager: SpeechManager,
+    onSwitchModel: ((ModelType) -> Unit)? = null,
     onClearChatHistory: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -1046,7 +1047,11 @@ fun SettingsScreen(
                                         ModelFileStatus.READY -> {
                                             AppSettings.setCurrentModelType(model)
                                             showModelSelectDialog = false
-                                            Toast.makeText(context, "已切换为 ${model.displayName}", Toast.LENGTH_SHORT).show()
+                                            if (onSwitchModel != null) {
+                                                onSwitchModel(model)
+                                            } else {
+                                                Toast.makeText(context, "已切换为 ${model.displayName}", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                         ModelFileStatus.INCOMPLETE -> {
                                             Toast.makeText(context, "⚠️ ${model.displayName} 正在写入中 (${check.currentBytes / 1024 / 1024}MB / ${check.expectedBytes / 1024 / 1024}MB - ${check.progressPercent}%)，请等待传输完成", Toast.LENGTH_LONG).show()
@@ -1069,7 +1074,11 @@ fun SettingsScreen(
                                             ModelFileStatus.READY -> {
                                                 AppSettings.setCurrentModelType(model)
                                                 showModelSelectDialog = false
-                                                Toast.makeText(context, "已切换为 ${model.displayName}", Toast.LENGTH_SHORT).show()
+                                                if (onSwitchModel != null) {
+                                                    onSwitchModel(model)
+                                                } else {
+                                                    Toast.makeText(context, "已切换为 ${model.displayName}", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                             ModelFileStatus.INCOMPLETE -> {
                                                 Toast.makeText(context, "⚠️ ${model.displayName} 正在写入中 (${check.progressPercent}%)，请等待传输完成", Toast.LENGTH_LONG).show()

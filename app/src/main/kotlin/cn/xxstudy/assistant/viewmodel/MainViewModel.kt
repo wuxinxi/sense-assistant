@@ -106,12 +106,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 切换当前激活的大模型
+     * 切换当前激活的大模型并立即重载底层引擎
      */
-    fun switchModel(context: android.content.Context, targetModel: ModelType, onComplete: (Boolean, String) -> Unit) {
+    fun switchModel(context: android.content.Context, targetModel: ModelType, onComplete: ((Boolean, String) -> Unit)? = null) {
         val targetFile = AppSettings.resolveModelFile(context, targetModel)
         if (targetFile == null || !targetFile.exists()) {
-            onComplete(false, "未在本地找到 ${targetModel.fileName}，请先推送或下载该模型")
+            onComplete?.invoke(false, "未在本地找到 ${targetModel.fileName}，请先推送或下载该模型")
             return
         }
 
@@ -123,8 +123,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 currentGenerationJob?.cancel()
             }
             _isModelLoaded.value = false
-            loadLocalModel(targetFile.absolutePath, targetModel, force = true)
-            onComplete(true, "已切换为 ${targetModel.displayName}")
+            _isLoading.value = true
+            _statusMessage.value = "引擎切换中 (${targetModel.displayName})..."
+            
+            val success = repository.loadModel(targetFile.absolutePath)
+            _isLoading.value = false
+            if (success) {
+                _isModelLoaded.value = true
+                _currentLoadedModel.value = targetModel
+                _statusMessage.value = "在线 (${targetModel.displayName})"
+                
+                // 对话流提示：若已有消息则追加切换通告，若无消息则显示新模型开场白
+                if (_chatMessages.value.isEmpty()) {
+                    _chatMessages.value = listOf(
+                        ChatMessage(
+                            messageCounter++,
+                            false,
+                            "您好！我是部署在您本地终端的 AI，已装载 ${targetModel.displayName} 模型。所有推理在设备芯片内部完成，数据绝不上云。"
+                        )
+                    )
+                } else {
+                    _chatMessages.value = _chatMessages.value + listOf(
+                        ChatMessage(
+                            id = messageCounter++,
+                            isUser = false,
+                            text = "💡 模型已动态切换为【${targetModel.displayName}】。接下来的对话将由新引擎为您解答。"
+                        )
+                    )
+                }
+                
+                // 重启 Ktor 微服务
+                cn.xxstudy.assistant.server.LlamaServer.start(repository)
+                onComplete?.invoke(true, "已成功切换为 ${targetModel.displayName}")
+            } else {
+                _statusMessage.value = "加载失败"
+                onComplete?.invoke(false, "加载 ${targetModel.displayName} 失败")
+            }
         }
     }
 

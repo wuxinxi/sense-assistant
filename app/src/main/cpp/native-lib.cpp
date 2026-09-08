@@ -14,6 +14,7 @@
 // Global pointers for the singleton engine
 llama_model *g_model = nullptr;
 llama_context *g_ctx = nullptr;
+std::string g_current_model_path = "";
 
 // 线程安全与打断控制
 std::mutex g_ctx_mutex;
@@ -30,20 +31,44 @@ extern "C"
 JNIEXPORT jboolean JNICALL
 Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path) {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
-    if (g_model != nullptr) return JNI_TRUE; // Already loaded
 
     const char *path = env->GetStringUTFChars(model_path, nullptr);
-    LOGI("Attempting to load model from: %s", path);
+    std::string new_path(path ? path : "");
+    env->ReleaseStringUTFChars(model_path, path);
+
+    if (new_path.empty()) {
+        LOGE("initContext: Empty model path provided!");
+        return JNI_FALSE;
+    }
+
+    // 若当前已经加载了同一个物理文件，且 Context 健全，直接复用
+    if (g_model != nullptr && g_ctx != nullptr && g_current_model_path == new_path) {
+        LOGI("Model already loaded from identical path: %s", new_path.c_str());
+        return JNI_TRUE;
+    }
+
+    // 核心修复：若此前已装载过旧模型，先彻底释放旧 Context 和 Model 内存，避免内存泄漏与模型锁死！
+    if (g_ctx != nullptr) {
+        LOGI("Releasing existing llama_context...");
+        llama_free(g_ctx);
+        g_ctx = nullptr;
+    }
+    if (g_model != nullptr) {
+        LOGI("Releasing existing llama_model...");
+        llama_model_free(g_model);
+        g_model = nullptr;
+    }
+    g_current_model_path.clear();
+
+    LOGI("Attempting to load new model from: %s", new_path.c_str());
     
     llama_backend_init();
     
     llama_model_params model_params = llama_model_default_params();
-    g_model = llama_model_load_from_file(path, model_params);
-    
-    env->ReleaseStringUTFChars(model_path, path);
+    g_model = llama_model_load_from_file(new_path.c_str(), model_params);
     
     if (g_model == nullptr) {
-        LOGE("Failed to load model!");
+        LOGE("Failed to load model from %s!", new_path.c_str());
         return JNI_FALSE;
     }
     
@@ -55,8 +80,15 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject th
     ctx_params.n_threads_batch = 4;
     
     g_ctx = llama_init_from_model(g_model, ctx_params);
+    if (g_ctx == nullptr) {
+        LOGE("Failed to create context from model!");
+        llama_model_free(g_model);
+        g_model = nullptr;
+        return JNI_FALSE;
+    }
     
-    LOGI("Model and Context loaded successfully!");
+    g_current_model_path = new_path;
+    LOGI("New Model and Context loaded successfully: %s", new_path.c_str());
     return JNI_TRUE;
 }
 
