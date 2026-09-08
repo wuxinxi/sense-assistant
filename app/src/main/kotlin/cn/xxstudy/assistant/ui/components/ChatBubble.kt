@@ -86,14 +86,15 @@ fun ChatBubble(
                                 onToggleCollapse = { onToggleThinkingCollapsed?.invoke() }
                             )
                             if (msg.text.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(10.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
                             }
                         }
 
                         // 2. 正式回答正文
-                        if (msg.text.isNotBlank()) {
+                        val displayText = if (!msg.thinkingText.isNullOrBlank()) msg.text.trimStart() else msg.text
+                        if (displayText.isNotBlank()) {
                             Text(
-                                text = msg.text,
+                                text = displayText,
                                 color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 15.sp,
                                 lineHeight = 22.sp

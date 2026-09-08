@@ -145,8 +145,16 @@ class ThinkingStreamParser {
         }
 
         // 思考已完成，所有后续字符直接流入正式回答
-        answerBuffer.append(token)
-        onAnswerChunk?.invoke(token)
+        // 关键体验优化：在回答正文首个有效字符输出前，彻底过滤掉模型随附的多余换行符（如 \n\n）
+        val effectiveToken = if (answerBuffer.isEmpty()) {
+            token.trimStart('\r', '\n')
+        } else {
+            token
+        }
+        if (effectiveToken.isNotEmpty()) {
+            answerBuffer.append(effectiveToken)
+            onAnswerChunk?.invoke(effectiveToken)
+        }
     }
 
     /**
@@ -160,8 +168,11 @@ class ThinkingStreamParser {
             if (isThinkingActive) {
                 thinkingBuffer.append(leftover)
             } else {
-                answerBuffer.append(leftover)
-                onAnswerChunk?.invoke(leftover)
+                val effective = if (answerBuffer.isEmpty()) leftover.trimStart('\r', '\n') else leftover
+                if (effective.isNotEmpty()) {
+                    answerBuffer.append(effective)
+                    onAnswerChunk?.invoke(effective)
+                }
             }
         }
         isThinkingActive = false
