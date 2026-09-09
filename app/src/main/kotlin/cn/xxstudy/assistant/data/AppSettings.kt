@@ -73,6 +73,8 @@ object AppSettings {
     // Keys
     private const val KEY_THEME_MODE = "key_theme_mode"
     private const val KEY_COLOR_THEME = "key_color_theme"
+    private const val KEY_CONTEXT_SIZE = "key_context_size"
+    private const val KEY_SYSTEM_PROMPT = "key_system_prompt"
     private const val KEY_CURRENT_MODEL = "key_current_model"
     private const val KEY_ENABLE_THINKING = "key_enable_thinking"
     private const val KEY_ASR_LANGUAGE = "key_asr_language"
@@ -92,6 +94,12 @@ object AppSettings {
 
     private val _colorTheme = MutableStateFlow(ColorTheme.PURPLE)
     val colorTheme: StateFlow<ColorTheme> = _colorTheme.asStateFlow()
+
+    private val _contextSize = MutableStateFlow(2048)
+    val contextSize: StateFlow<Int> = _contextSize.asStateFlow()
+
+    private val _systemPrompt = MutableStateFlow("你是 TangRen 端侧智能助手。请用简明扼要的中文回答用户的问题。")
+    val systemPrompt: StateFlow<String> = _systemPrompt.asStateFlow()
 
     private val _currentModelType = MutableStateFlow(ModelType.MINICPM5_2B)
     val currentModelType: StateFlow<ModelType> = _currentModelType.asStateFlow()
@@ -132,6 +140,9 @@ object AppSettings {
         val savedColorTheme = prefs.getString(KEY_COLOR_THEME, ColorTheme.PURPLE.name)
         _colorTheme.value = runCatching { ColorTheme.valueOf(savedColorTheme ?: ColorTheme.PURPLE.name) }.getOrDefault(ColorTheme.PURPLE)
 
+        _contextSize.value = prefs.getInt(KEY_CONTEXT_SIZE, 2048)
+        _systemPrompt.value = prefs.getString(KEY_SYSTEM_PROMPT, "你是 TangRen 端侧智能助手。请用简明扼要的中文回答用户的问题。") ?: "你是 TangRen 端侧智能助手。请用简明扼要的中文回答用户的问题。"
+
         val savedModelType = prefs.getString(KEY_CURRENT_MODEL, ModelType.MINICPM5_2B.name)
         _currentModelType.value = runCatching { ModelType.valueOf(savedModelType ?: ModelType.MINICPM5_2B.name) }.getOrDefault(ModelType.MINICPM5_2B)
 
@@ -157,6 +168,16 @@ object AppSettings {
     fun setColorTheme(theme: ColorTheme) {
         _colorTheme.value = theme
         if (::prefs.isInitialized) prefs.edit().putString(KEY_COLOR_THEME, theme.name).apply()
+    }
+
+    fun setContextSize(size: Int) {
+        _contextSize.value = size
+        if (::prefs.isInitialized) prefs.edit().putInt(KEY_CONTEXT_SIZE, size).apply()
+    }
+
+    fun setSystemPrompt(prompt: String) {
+        _systemPrompt.value = prompt
+        if (::prefs.isInitialized) prefs.edit().putString(KEY_SYSTEM_PROMPT, prompt).apply()
     }
 
     fun setCurrentModelType(modelType: ModelType) {

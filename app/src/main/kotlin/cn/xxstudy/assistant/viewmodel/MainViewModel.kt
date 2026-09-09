@@ -20,7 +20,7 @@ data class ChatMessage(
     val text: String,
     val thinkingText: String? = null,
     val isThinkingActive: Boolean = false,
-    val isThinkingCollapsed: Boolean = false,
+    val isThinkingCollapsed: Boolean = true,
     val isThinking: Boolean = false,
     val metrics: String? = null
 )
@@ -69,7 +69,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isLoading.value = true
             _statusMessage.value = "引擎装载中 (${modelType.displayName})..."
-            val success = repository.loadModel(absolutePath)
+            val success = repository.loadModel(absolutePath, AppSettings.contextSize.value)
             _isLoading.value = false
             if (success) {
                 _isModelLoaded.value = true
@@ -126,7 +126,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isLoading.value = true
             _statusMessage.value = "引擎切换中 (${targetModel.displayName})..."
             
-            val success = repository.loadModel(targetFile.absolutePath)
+            val success = repository.loadModel(targetFile.absolutePath, AppSettings.contextSize.value)
             _isLoading.value = false
             if (success) {
                 _isModelLoaded.value = true
@@ -211,14 +211,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // 构造流式思考解析器
             val parser = ThinkingStreamParser()
 
-            // 判断是否需要抑制思考输出
+            // 判断是否为新对话的第一轮
+            val isFirstTurn = _chatMessages.value.count { it.isUser } <= 1
             val enableThinking = AppSettings.enableThinking.value
             val currentModel = _currentLoadedModel.value ?: AppSettings.currentModelType.value
-            val finalPrompt = if (!enableThinking && currentModel.supportsThinking) {
-                // 若模型支持思考但用户在设置中关闭了思考，注入指令直接回答
-                "<|im_start|>system\n请直接给出最终回答，无需输出思考过程。<|im_end|>\n<|im_start|>user\n$prompt<|im_end|>\n<|im_start|>assistant\n"
-            } else {
-                prompt
+            
+            var finalPrompt = ""
+            if (isFirstTurn) {
+                val sysText = AppSettings.systemPrompt.value
+                finalPrompt += "<|im_start|>system\n$sysText"
+                if (!enableThinking && currentModel.supportsThinking) {
+                    finalPrompt += "\n请直接给出最终回答，无需输出思考过程。"
+                }
+                finalPrompt += "<|im_end|>\n"
+            } else if (!enableThinking && currentModel.supportsThinking) {
+                // 后续轮次若不想思考，通常不需要再次强调，但为了保险依然可以简短补一句，这里我们选择仅在首轮注入即可
+            }
+            
+            finalPrompt += "<|im_start|>user\n$prompt<|im_end|>\n<|im_start|>assistant\n"
+            
+            if (!enableThinking && currentModel.supportsThinking) {
+                finalPrompt = "<|system_cmd_disable_thinking|>" + finalPrompt
             }
 
             // 初始化 TTS 流式切句器（仅当开启答案语音朗读时）
@@ -402,6 +415,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentGenerationJob?.cancel()
         currentThinkingId = null
         repository.stopGeneration()
+        viewModelScope.launch {
+            repository.resetSession()
+        }
         _chatMessages.value = listOf(
             ChatMessage(messageCounter++, false, "上下文已重置。我是部署在您本地终端的 AI，所有交互在端侧封闭运行。")
         )

@@ -25,7 +25,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
 import cn.xxstudy.assistant.viewmodel.ChatMessage
+import com.halilibo.richtext.markdown.Markdown
 
 @Composable
 fun ChatBubble(
@@ -93,12 +95,19 @@ fun ChatBubble(
                         // 2. 正式回答正文
                         val displayText = if (!msg.thinkingText.isNullOrBlank()) msg.text.trimStart() else msg.text
                         if (displayText.isNotBlank()) {
-                            Text(
-                                text = displayText,
-                                color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 15.sp,
-                                lineHeight = 22.sp
-                            )
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                androidx.compose.material3.LocalContentColor provides if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                androidx.compose.material3.LocalTextStyle provides androidx.compose.ui.text.TextStyle(
+                                    fontSize = 15.sp,
+                                    lineHeight = 22.sp
+                                )
+                            ) {
+                                com.halilibo.richtext.ui.material3.Material3RichText(
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                ) {
+                                    Markdown(displayText)
+                                }
+                            }
                         } else if (msg.thinkingText != null && msg.isThinkingActive) {
                             // 正在深度思考中，且正文尚未开始输出
                             Row(
@@ -232,16 +241,22 @@ private fun ThinkingCard(
                         thickness = 0.5.dp
                     )
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = thinkingText.ifBlank { "正在组织思考链路..." },
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
-                    )
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        androidx.compose.material3.LocalTextStyle provides androidx.compose.ui.text.TextStyle(
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    ) {
+                        com.halilibo.richtext.ui.material3.Material3RichText(
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        ) {
+                            Markdown(thinkingText.ifBlank { "正在组织思考链路..." })
+                        }
+                    }
                 }
             }
         }
     }
 }
-

@@ -79,4 +79,8 @@ dependencies {
     implementation("io.ktor:ktor-server-core:$ktorVersion")
     implementation("io.ktor:ktor-server-cio:$ktorVersion")
     implementation("io.ktor:ktor-server-cors:$ktorVersion")
+    
+    // Markdown parser
+    implementation("com.halilibo.compose-richtext:richtext-commonmark:0.17.0")
+    implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.17.0")
 }

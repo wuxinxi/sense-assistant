@@ -782,6 +782,125 @@ fun SettingsScreen(
 
                 SettingRowDivider()
 
+                val contextSize by AppSettings.contextSize.collectAsState()
+                var showContextSizeDialog by remember { mutableStateOf(false) }
+                SettingItemRow(
+                    icon = Icons.Default.Memory,
+                    iconBgColor = Color(0xFF795548),
+                    title = "多轮上下文窗口 (n_ctx)",
+                    subtitle = "滑动窗口策略，当前限制 $contextSize Tokens",
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SettingTagBadge(text = "$contextSize", isSuccess = true)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+                        }
+                    },
+                    onClick = {
+                        triggerHaptic()
+                        showContextSizeDialog = true
+                    }
+                )
+
+                if (showContextSizeDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showContextSizeDialog = false },
+                        title = { Text("设置上下文窗口", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Column {
+                                Text("选择更大的窗口可以保留更久的对话记忆，但需要更多物理内存 (RAM)。超过窗口的旧对话将自动被滑动截断。")
+                                Spacer(modifier = Modifier.height(16.dp))
+                                val options = listOf(1024, 2048, 4096)
+                                options.forEach { size ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                triggerHaptic()
+                                                AppSettings.setContextSize(size)
+                                                showContextSizeDialog = false
+                                            }
+                                            .padding(vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = contextSize == size,
+                                            onClick = {
+                                                triggerHaptic()
+                                                AppSettings.setContextSize(size)
+                                                showContextSizeDialog = false
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("$size Tokens", fontSize = 16.sp)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showContextSizeDialog = false }) {
+                                Text("关闭")
+                            }
+                        }
+                    )
+                }
+
+                SettingRowDivider()
+
+                val systemPrompt by AppSettings.systemPrompt.collectAsState()
+                var showSystemPromptDialog by remember { mutableStateOf(false) }
+                var tempSystemPrompt by remember { mutableStateOf(systemPrompt) }
+
+                SettingItemRow(
+                    icon = Icons.Default.EditNote,
+                    iconBgColor = Color(0xFF009688),
+                    title = "System Prompt (系统设定)",
+                    subtitle = "自定义 AI 角色设定（设为 Attention Sink）",
+                    trailing = {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+                    },
+                    onClick = {
+                        triggerHaptic()
+                        tempSystemPrompt = systemPrompt
+                        showSystemPromptDialog = true
+                    }
+                )
+
+                if (showSystemPromptDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showSystemPromptDialog = false },
+                        title = { Text("修改系统提示词", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Column {
+                                Text("这部分内容会作为新对话的第一句系统指令注入，并被 KV Cache 引擎永久保留。")
+                                Spacer(modifier = Modifier.height(16.dp))
+                                OutlinedTextField(
+                                    value = tempSystemPrompt,
+                                    onValueChange = { tempSystemPrompt = it },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 200.dp),
+                                    placeholder = { Text("例如：你是一个幽默的助手...") }
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                triggerHaptic()
+                                AppSettings.setSystemPrompt(tempSystemPrompt)
+                                showSystemPromptDialog = false
+                            }) {
+                                Text("保存")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showSystemPromptDialog = false }) {
+                                Text("取消")
+                            }
+                        }
+                    )
+                }
+
+                SettingRowDivider()
+
                 SettingItemRow(
                     icon = Icons.Default.Mic,
                     iconBgColor = Color(0xFF009688),

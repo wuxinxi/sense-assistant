@@ -1,0 +1,4 @@
+repositories { mavenCentral(); google() }
+configurations { fetch }
+dependencies { fetch "com.halilibo.compose-richtext:richtext-commonmark:0.17.0" }
+task resolve { doLast { configurations.fetch.resolvedConfiguration.firstLevelModuleDependencies.each { println it.moduleVersion } } }

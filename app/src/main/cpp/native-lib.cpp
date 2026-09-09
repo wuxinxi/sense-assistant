@@ -4,6 +4,7 @@
 #include <chrono>
 #include <atomic>
 #include <mutex>
+#include <cmath>
 #include "llama.h"
 #include <android/log.h>
 
@@ -20,6 +21,24 @@ std::string g_current_model_path = "";
 std::mutex g_ctx_mutex;
 std::atomic<bool> g_should_stop{false};
 
+// 多轮对话状态追踪 (KV Cache 管理)
+int g_n_keep = 0; // Attention sink tokens (System prompt)
+int g_n_past = 0; // Current total tokens in cache
+std::vector<int> g_turn_starts; // Track start pos of each turn for eviction
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_cn_xxstudy_assistant_engine_LlamaEngine_resetSession(JNIEnv *env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_ctx_mutex);
+    if (g_ctx != nullptr) {
+        llama_memory_clear(llama_get_memory(g_ctx), true);
+    }
+    g_n_past = 0;
+    g_n_keep = 0;
+    g_turn_starts.clear();
+    LOGI("Session reset. KV Cache cleared.");
+}
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_cn_xxstudy_assistant_engine_LlamaEngine_stopGeneration(JNIEnv *env, jobject thiz) {
@@ -29,7 +48,7 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_stopGeneration(JNIEnv *env, jobject
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path) {
+Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path, jint n_ctx) {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
 
     const char *path = env->GetStringUTFChars(model_path, nullptr);
@@ -73,7 +92,7 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject th
     }
     
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = 1024; // Limit context for mobile test
+    ctx_params.n_ctx = n_ctx; // Use user configured context size
     
     // 性能优化：显式指定线程数（通常设置为 4 个大核能达到最佳能效比）
     ctx_params.n_threads = 4;
@@ -88,6 +107,9 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject th
     }
     
     g_current_model_path = new_path;
+    g_n_past = 0;
+    g_n_keep = 0;
+    g_turn_starts.clear();
     LOGI("New Model and Context loaded successfully: %s", new_path.c_str());
     return JNI_TRUE;
 }
@@ -157,8 +179,16 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     const char *prompt_cstr = env->GetStringUTFChars(prompt, nullptr);
     LOGI("Received prompt: %s", prompt_cstr);
     
-    // 1. 组装 Chat Template（若上层已包装则直接使用，否则以标准 ChatML 格式包裹）
     std::string prompt_str(prompt_cstr);
+    
+    bool disable_thinking = false;
+    std::string disable_flag = "<|system_cmd_disable_thinking|>";
+    if (prompt_str.find(disable_flag) == 0) {
+        disable_thinking = true;
+        prompt_str = prompt_str.substr(disable_flag.length());
+    }
+
+    // 1. 组装 Chat Template
     std::string final_prompt;
     if (prompt_str.find("<|im_start|>") != std::string::npos) {
         final_prompt = prompt_str;
@@ -176,22 +206,86 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     }
     tokens.resize(n_tokens);
 
-    // 开始计时
     auto t_start = std::chrono::high_resolution_clock::now();
+    uint32_t n_ctx = llama_n_ctx(g_ctx);
+    int max_predict = 1536;
 
-    // 核心修复：每次全新对话必须清空上下文 Memory (即原 KV Cache)，否则位置会无限累加，导致速度暴降！
-    llama_memory_clear(llama_get_memory(g_ctx), true);
-
-    // 3. 将 Prompt 送入推理上下文 (Ingest)
-    llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
-    if (llama_decode(g_ctx, batch) != 0) {
-        env->ReleaseStringUTFChars(prompt, prompt_cstr);
-        return env->NewStringUTF("Error: llama_decode failed.");
+    // 如果是全新对话，重置状态
+    if (g_n_past == 0) {
+        llama_memory_clear(llama_get_memory(g_ctx), true);
+        g_turn_starts.clear();
+        // 如果有 system prompt 或者前导 tokens，可以将其标记为 n_keep
+        // 简单起见，把第一轮 Prompt 的前半部分（或全部）作为 n_keep
+        // 为了防崩溃，强制保留最初的 32 个 token 作为 Attention Sink
+        g_n_keep = (n_tokens > 32) ? 32 : n_tokens;
     }
 
-    // 4. 初始化采样器 (支持温度与 Top-P，同时保留确定性分布)
+    // 记录本轮对话起始位置
+    g_turn_starts.push_back(g_n_past);
+
+    // 3. 滑动窗口检测与截断 (如果空间不足)
+    while (g_turn_starts.size() > 1 && g_n_past + n_tokens + max_predict > n_ctx) {
+        int oldest_start = g_turn_starts[1]; // [0] is attention sink / first turn start
+        int oldest_end = (g_turn_starts.size() > 2) ? g_turn_starts[2] : g_n_past;
+        int n_discard = oldest_end - oldest_start;
+        
+        LOGI("Context full (g_n_past=%d). Discarding oldest turn from pos %d to %d (n_discard=%d)", g_n_past, oldest_start, oldest_end, n_discard);
+        
+        // 删除旧的 Token
+        llama_memory_seq_rm(llama_get_memory(g_ctx), 0, oldest_start, oldest_end);
+        // 将后续的 Token 平移
+        llama_memory_seq_add(llama_get_memory(g_ctx), 0, oldest_end, -1, -n_discard);
+        
+        // 更新所有的位置追踪变量
+        g_n_past -= n_discard;
+        g_turn_starts.erase(g_turn_starts.begin() + 1);
+        for (size_t i = 1; i < g_turn_starts.size(); ++i) {
+            g_turn_starts[i] -= n_discard;
+        }
+    }
+
+    // 4. 将 Prompt 送入推理上下文 (Ingest)
+    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    batch.n_tokens = n_tokens;
+    for (int i = 0; i < n_tokens; i++) {
+        batch.token[i] = tokens[i];
+        batch.pos[i] = g_n_past + i;
+        batch.seq_id[i][0] = 0;
+        batch.n_seq_id[i] = 1;
+        batch.logits[i] = (i == n_tokens - 1); // Only need logits for the last token
+    }
+
+    if (llama_decode(g_ctx, batch) != 0) {
+        env->ReleaseStringUTFChars(prompt, prompt_cstr);
+        llama_batch_free(batch);
+        return env->NewStringUTF("Error: llama_decode failed.");
+    }
+    g_n_past += n_tokens;
+
+    // 5. 初始化采样器
     auto sparams = llama_sampler_chain_default_params();
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
+    
+    if (disable_thinking) {
+        auto get_token = [&](const std::string& str) {
+            std::vector<llama_token> t(2);
+            int n = llama_tokenize(vocab, str.c_str(), str.length(), t.data(), t.size(), false, true);
+            if (n > 0) return t[0];
+            return (llama_token)-1;
+        };
+        llama_token t1 = get_token("<|thought_begin|>");
+        llama_token t2 = get_token("<think>");
+        std::vector<llama_logit_bias> biases;
+        if (t1 != -1) biases.push_back({t1, -INFINITY});
+        if (t2 != -1) biases.push_back({t2, -INFINITY});
+        if (!biases.empty()) {
+            llama_sampler_chain_add(smpl, llama_sampler_init_logit_bias(
+                llama_vocab_n_tokens(vocab), biases.size(), biases.data()
+            ));
+            LOGI("Thinking disabled via logit bias. t1=%d, t2=%d", t1, t2);
+        }
+    }
+
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.95f, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
@@ -199,20 +293,21 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     
     std::string response = "";
     std::string token_stream_buf = "";
-    int max_predict = 1536; // 放宽最大步数至 1536，完整承载 MiniCPM5 深度思考链与长文本回答
     
     bool is_first_token = true;
     long long ttft_ms = 0;
     int generated_tokens = 0;
     
+    // B1 思考链外科手术：记录起始和结束坐标
+    int pos_thought_start = -1;
+    int pos_thought_end = -1;
+    
     for (int i = 0; i < max_predict; i++) {
-        // 核心检测：检查是否收到上层打断请求
         if (g_should_stop.load()) {
             LOGI("Generation interrupted by user request at token %d.", i);
             break;
         }
 
-        // 采样预测下一个 token
         llama_token id = llama_sampler_sample(smpl, g_ctx, -1);
         llama_sampler_accept(smpl, id);
         
@@ -224,19 +319,26 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
         
         generated_tokens++;
         
-        // 检查是否生成结束 (End of generation)
         if (llama_vocab_is_eog(vocab, id)) {
             break; 
         }
         
-        // Token 转文字 (special 设置为 true，使得 <|thought_begin|> 等思考标记能作为文本输出供上层状态机捕获)
         char buf[128];
         int n_chars = llama_token_to_piece(vocab, id, buf, sizeof(buf), 0, true);
         if (n_chars > 0) {
-            response.append(buf, n_chars);
-            token_stream_buf.append(buf, n_chars);
+            std::string token_str(buf, n_chars);
+            response += token_str;
+            token_stream_buf += token_str;
+            
+            // 追踪思考链边界
+            if (token_str.find("<|thought_begin|>") != std::string::npos) {
+                pos_thought_start = g_n_past;
+                LOGI("B1: Found <|thought_begin|> at pos %d", pos_thought_start);
+            } else if (token_str.find("<|thought_end|>") != std::string::npos) {
+                pos_thought_end = g_n_past;
+                LOGI("B1: Found <|thought_end|> at pos %d", pos_thought_end);
+            }
 
-            // 核心修复：检查缓冲区中完整 UTF-8 字符长度，防止中文字符跨 Token 截断导致 NewStringUTF 报 illegal continuation byte 闪退
             size_t complete_len = get_complete_utf8_length(token_stream_buf);
             if (complete_len > 0) {
                 std::string ready_text = token_stream_buf.substr(0, complete_len);
@@ -248,11 +350,30 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
             }
         }
         
-        // 将新 token 放回上下文准备下一轮推理
-        batch = llama_batch_get_one(&id, 1);
+        batch.token[0] = id;
+        batch.pos[0] = g_n_past;
+        batch.seq_id[0][0] = 0;
+        batch.n_seq_id[0] = 1;
+        batch.logits[0] = true;
+        batch.n_tokens = 1;
+
         if (llama_decode(g_ctx, batch) != 0) {
             break;
         }
+        g_n_past++;
+    }
+    
+    llama_batch_free(batch);
+    
+    // B1: 思考链外科手术切除执行
+    if (pos_thought_start != -1 && pos_thought_end != -1 && pos_thought_end > pos_thought_start) {
+        int n_thought = pos_thought_end - pos_thought_start + 1;
+        LOGI("B1: Excisional surgery of thought chain from pos %d to %d (n=%d tokens)", pos_thought_start, pos_thought_end, n_thought);
+        llama_memory_seq_rm(llama_get_memory(g_ctx), 0, pos_thought_start, pos_thought_end + 1);
+        llama_memory_seq_add(llama_get_memory(g_ctx), 0, pos_thought_end + 1, -1, -n_thought);
+        g_n_past -= n_thought;
+    } else if (pos_thought_start != -1) {
+        LOGI("B1: Thought chain start found but no end. Skipping excision to avoid corruption.");
     }
     
     auto t_end = std::chrono::high_resolution_clock::now();
