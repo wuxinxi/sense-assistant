@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Platform-Android%2010%2B-brightgreen.svg" alt="Platform">
   <img src="https://img.shields.io/badge/Arch-ARM64--v8a%20(NEON%20%2B%20dotprod)-blue.svg" alt="Arch">
   <img src="https://img.shields.io/badge/ASR-SenseVoice%20Small%20INT8-cyan.svg" alt="ASR">
-  <img src="https://img.shields.io/badge/LLM-llama.cpp%20C%2B%2B17%20(Qwen2.5)-orange.svg" alt="LLM">
+  <img src="https://img.shields.io/badge/LLM-llama.cpp%20C%2B%2B17%20(MiniCPM5%20%2F%20Qwen2.5)-orange.svg" alt="LLM">
   <img src="https://img.shields.io/badge/TTS-MeloTTS%2044.1kHz%20Bilingual-magenta.svg" alt="TTS">
   <img src="https://img.shields.io/badge/Speed-36%20tokens%2Fs%20(Pure%20CPU)-red.svg" alt="Speed">
   <img src="https://img.shields.io/badge/Microservice-Ktor%20%2B%20SSE-purple.svg" alt="Server">
@@ -16,7 +16,11 @@
 ## 📖 项目简介
 
 <p align="center">
-  <img src="docs/images/ui.jpg" alt="Architecture Flow" width="50%">
+  <img src="docs/images/Screenshot_Index.png" alt="Chat UI" width="30%">
+  &nbsp;&nbsp;
+  <img src="docs/images/Screenshot_Setting1.png" alt="Settings 1" width="30%">
+  &nbsp;&nbsp;
+  <img src="docs/images/Screenshot_Setting2.png" alt="Settings 2" width="30%">
 </p>
 
 **SenseAssistant** 是一个专为 Android 移动终端打造的高性能、轻量级、**100% 物理断网可用**的纯端侧离线智能体与私有微服务应用。
@@ -32,18 +36,21 @@
 - 🎙️ **SenseVoice 纯离线语音识别 (ASR)**：
   - 基于新一代 `sherpa-onnx` 原生驱动，适配阿里通义 **SenseVoice Small INT8** 量化模型；
   - 手机端仅需 **~1.3s 极速冷启动**，支持流式麦克风实时音频输入与标点富文本清洗，完全无需联网。
-- ⚡ **纯 CPU 4 线程极限推理 (LLM)**：
-  - 深度适配 **Qwen2.5-0.5B-Instruct-GGUF (Q4_K_M)**，权重文件仅 **491MB**；
-  - 硬解 ARMv8.2-A `+dotprod` 专有向量点积指令，纯 CPU 峰值推理达到 **36 token/s**。
+- ⚡ **深度思考大模型与纯 CPU 极限推理 (LLM)**：
+  - 深度适配 **MiniCPM5-2B-Q4_K_M.gguf** (支持自带深度思考链) 以及 **Qwen2.5-0.5B-Instruct-GGUF**，全面拥抱新一代 Reasoning Model 端侧运行；
+  - **外科手术式 KV Cache 切除 (B1 算法)**：针对深度思考模型独创的动态显存截断技术，每轮对话后自动从底层 `llama_memory` 中定位 `<|thought_begin|>` 到 `<|thought_end|>` 的索引边界，将冗长的内部思考“记忆”精准切除，彻底根治上下文膨胀与 OOM 问题；
+  - **硬件级 Logit Bias 镇压**：当用户在设置中关闭推理思考时，底层引擎会在采样链最前端（`llama_sampler_init_logit_bias`），从物理层面将思考起始符的分布概率强制压制为 `-INFINITY`，突破 RLHF 固化肌肉记忆，实现 100% 确定性的思考阻断；
+  - 硬解 ARMv8.2-A `+dotprod` 专有向量点积指令，纯 CPU 峰值推理达到极速吞吐。
 - 🔊 **MeloTTS 44.1kHz 高保真中英双语语音合成 (TTS)**：
   - 基于新一代 `sherpa-onnx` VITS 引擎，深度适配 **MeloTTS-zh_en**（44.1kHz CD 级超清采样率）；
   - 支持中英文无缝混读（如自然朗读 "AI", "Python", "Android" 等专有名词），内置 **5 款精调人声预设**（温暖陪伴、知性女声、干练女声、活力男声、沉稳男声），支持语速与音调无级调节；
   - **ARM64 NEON SIMD 硬件级加速**：FP32 纯 CPU 推理 Real-Time Factor (RTF) 达 **0.850**（低于 1.0 即合成速度快于播放速度），彻底根治音频下溢卡顿（AudioTrack Underrun）；
   - **标点优先流式断句 (Strict Punctuation-First)**：首个逗号/句号即发声，日常问候短句仅需 **~640ms 极速出声**，彻底避免中文词组生硬截断与英文碎片化；
   - **单调递增 Token 抢占式打断**：底层基于原子代数与互斥机制，新提问或打断瞬间清空音频流水线并停止合成，保证纳秒级静音响应。
-- 🎨 **豆包级极简语音胶囊与声浪动效**：
+- 🎨 **商业级极简交互与专业 Markdown 渲染引擎**：
   - 底部极简胶囊栏（`DoubaoInputBar`），支持**“单击切换键盘 / 长按语音输入”**双模手势体系；
-  - 36 频段自适应动效声浪面板（`DoubaoVoicePanel`），实时跟随麦克风输入分贝流畅律动。
+  - 36 频段自适应动效声浪面板（`DoubaoVoicePanel`），实时跟随麦克风输入分贝流畅律动；
+  - 引入了 `compose-richtext` 商业级排版库，支持多级标题、表格、代码块以及深度思考过程的丝滑折叠呈现，并完美自适应 Material 3 动态暗黑主题颜色。
 - 🛡️ **JNI 原生并发互斥与即时打断**：
   - 底层构建 `std::mutex g_ctx_mutex` 与原子信号 `std::atomic<bool> g_should_stop`；
   - 彻底规避并发调用引发的 `SIGSEGV (SEGV_MAPERR)` 闪退，支持随时发送新消息即时打断上一轮模型生成与语音播报。
@@ -83,8 +90,8 @@ flowchart TD
 
     subgraph Native["原生大模型推理底座 (C++17 NDK)"]
         Mutex["std::mutex 互斥锁"]
-        Llama["llama.cpp (ARMv8.2-A DotProd 4-Thread)"]
-        Qwen["Qwen2.5-0.5B-Instruct (~491MB GGUF)"]
+        Llama["llama.cpp (KV Cache B1 Excision, Logit Bias)"]
+        Qwen["MiniCPM5-2B / Qwen2.5-0.5B"]
     end
 
     subgraph TTS["离线高保真语音合成 (sherpa-onnx & AudioTrack)"]
@@ -130,7 +137,9 @@ flowchart TD
 #### 方案 A：一键脚本自动化（推荐）
 
 ```bash
-# 1. 一键下载 Qwen2.5 大模型、SenseVoice 语音识别与 MeloTTS 语音合成模型
+# 1. 执行一键下载脚本
+# 脚本已支持交互式选择，会逐一询问是否需要下载某个模型（默认按回车确认，输入 n 跳过）
+# 若想免打扰全部下载，可追加 --yes 参数：bash Script/download_all.sh --yes
 bash Script/download_all.sh
 
 # 2. 手机开启 USB 调试并连接电脑，一键推入手机私有沙盒并自动配置权限
@@ -144,9 +153,13 @@ bash Script/push_models_to_phone.sh
 1. **SenseVoice 语音识别模型**：
    - 官方 ModelScope 仓库：[sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17](https://modelscope.cn/models/k2-fsa/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17)
    - 需获取文件：`model.int8.onnx` (~228MB) 与 `tokens.txt` (~308KB)。
-2. **Qwen2.5-0.5B 大语言模型**：
-   - ModelScope：[qwen/Qwen2.5-0.5B-Instruct-GGUF](https://modelscope.cn/models/qwen/Qwen2.5-0.5B-Instruct-GGUF)
-   - 目标文件：`qwen2.5-0.5b-instruct-q4_k_m.gguf` (~491MB)。
+2. **深度思考大语言模型 (LLM)**（按需任选一）：
+   - **MiniCPM5-2B-Q4_K_M.gguf** (推荐，自带深度思考能力，端侧推理效果震撼)：
+     - HuggingFace/ModelScope：[openbmb/MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)
+     - 目标文件：`MiniCPM5-2B-Q4_K_M.gguf` (~1.4GB)
+   - **Qwen2.5-0.5B-Instruct-GGUF** (极致轻量化)：
+     - ModelScope：[qwen/Qwen2.5-0.5B-Instruct-GGUF](https://modelscope.cn/models/qwen/Qwen2.5-0.5B-Instruct-GGUF)
+     - 目标文件：`qwen2.5-0.5b-instruct-q4_k_m.gguf` (~491MB)。
 3. **MeloTTS 44.1kHz 中英双语高保真语音合成模型**：
    - 官方发布仓库：[vits-melo-tts-zh_en](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models)
    - 目标文件：`model.onnx` (FP32，推荐性能模式 ~156MB)、`lexicon.txt`、`tokens.txt`、`dict/` 目录及 `*.fst` 规则文件。
