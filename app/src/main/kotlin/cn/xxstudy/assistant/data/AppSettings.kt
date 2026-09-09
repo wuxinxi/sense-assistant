@@ -70,6 +70,8 @@ enum class ModelType(
 object AppSettings {
     private const val PREFS_NAME = "sense_assistant_settings"
 
+    private const val SYSTEM_PROMPT = "你是端侧智能助手iash。请用简明扼要的中文回答用户的问题。"
+
     // Keys
     private const val KEY_THEME_MODE = "key_theme_mode"
     private const val KEY_COLOR_THEME = "key_color_theme"
@@ -99,7 +101,7 @@ object AppSettings {
     private val _contextSize = MutableStateFlow(2048)
     val contextSize: StateFlow<Int> = _contextSize.asStateFlow()
 
-    private val _systemPrompt = MutableStateFlow("你是 TangRen 端侧智能助手。请用简明扼要的中文回答用户的问题。")
+    private val _systemPrompt = MutableStateFlow(SYSTEM_PROMPT)
     val systemPrompt: StateFlow<String> = _systemPrompt.asStateFlow()
 
     private val _currentModelType = MutableStateFlow(ModelType.MINICPM5_2B)
@@ -145,7 +147,7 @@ object AppSettings {
         _colorTheme.value = runCatching { ColorTheme.valueOf(savedColorTheme ?: ColorTheme.PURPLE.name) }.getOrDefault(ColorTheme.PURPLE)
 
         _contextSize.value = prefs.getInt(KEY_CONTEXT_SIZE, 2048)
-        _systemPrompt.value = prefs.getString(KEY_SYSTEM_PROMPT, "你是 TangRen 端侧智能助手。请用简明扼要的中文回答用户的问题。") ?: "你是 TangRen 端侧智能助手。请用简明扼要的中文回答用户的问题。"
+        _systemPrompt.value = prefs.getString(KEY_SYSTEM_PROMPT, SYSTEM_PROMPT) ?: SYSTEM_PROMPT
 
         val savedModelType = prefs.getString(KEY_CURRENT_MODEL, ModelType.MINICPM5_2B.name)
         _currentModelType.value = runCatching { ModelType.valueOf(savedModelType ?: ModelType.MINICPM5_2B.name) }.getOrDefault(ModelType.MINICPM5_2B)
