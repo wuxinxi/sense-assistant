@@ -229,7 +229,12 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     }
 
                     viewModel.startVoiceRecording(
-                        autoSend = true,
+                        autoSend = false,
+                        onFinalTextReady = {
+                            if (!AppSettings.asrAutoSend.value) {
+                                inputText = it
+                            }
+                        },
                         onError = { errMsg ->
                             Toast.makeText(context, errMsg, Toast.LENGTH_SHORT).show()
                         }
