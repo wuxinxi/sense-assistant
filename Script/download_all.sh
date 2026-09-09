@@ -45,4 +45,4 @@ echo "🔍 检查虚拟环境依赖 huggingface_hub ..."
 
 # 4. 执行 Python 增量下载任务
 echo "🌐 启动国内镜像断点续传下载..."
-"$PYTHON_BIN" "$SCRIPT_DIR/download_models.py"
+"$PYTHON_BIN" "$SCRIPT_DIR/download_models.py" "$@"

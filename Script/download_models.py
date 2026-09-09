@@ -43,7 +43,19 @@ TASKS = [
         "title": "SenseVoice Small INT8 (语音识别模型)",
         "repo_id": "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
         "local_dir": PROJECT_ROOT / "sense-voice-int8",
-        "allow_patterns": ["model.int8.onnx", "tokens.txt"],  # 仅需核心模型与字典
+        "allow_patterns": ["model.int8.onnx", "tokens.txt"],
+    },
+    {
+        "title": "MiniCPM5-2B-Q4_K_M (深度思考大模型, ~1.4GB)",
+        "repo_id": "openbmb/MiniCPM5-2B-GGUF",
+        "local_dir": PROJECT_ROOT / "llm",
+        "allow_patterns": ["MiniCPM5-2B-Q4_K_M.gguf"],
+    },
+    {
+        "title": "Qwen2.5-0.5B-Instruct (轻量级大模型, ~491MB)",
+        "repo_id": "qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "local_dir": PROJECT_ROOT / "llm",
+        "allow_patterns": ["qwen2.5-0.5b-instruct-q4_k_m.gguf"],
     },
 ]
 
@@ -165,19 +177,27 @@ def main():
     print("###                 镜像源: https://hf-mirror.com                ###")
     print("####################################################################")
 
+    auto_yes = "--yes" in sys.argv or "-y" in sys.argv or "--all" in sys.argv
+
     success_count = 0
     for task in TASKS:
+        if not auto_yes:
+            ans = input(f"\n❓ 是否需要下载 {task['title']} ? [Y/n]: ").strip().lower()
+            if ans == 'n':
+                print(f"⏭️ 已跳过 {task['title']}")
+                success_count += 1
+                continue
+                
         ok = download_task(task)
         if ok:
             success_count += 1
 
     print("\n" + "#" * 68)
     if success_count == len(TASKS):
-        print("🎯 所有模型均已下载/补齐完毕，项目依赖全部就绪！")
+        print("🎯 所有选定模型均已下载/补齐完毕，项目依赖就绪！")
     else:
         print(f"⚠️ 部分任务未完成 (成功 {success_count}/{len(TASKS)})，可重新运行本脚本继续断点续传。")
     print("#" * 68)
-
 
 if __name__ == "__main__":
     main()
