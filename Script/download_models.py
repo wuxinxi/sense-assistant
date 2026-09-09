@@ -23,9 +23,42 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 
 TASKS = [
     {
-        "title": "VITS MeloTTS 中英双语超清语音合成 (44.1kHz / 51MB INT8)",
+        "repo_id": "csukuangfj/matcha-icefall-zh-baker",
+        "local_dir": PROJECT_ROOT / "matcha-icefall-zh-baker",
+        "title": "Matcha-TTS 极速纯净中文语音合成模型",
+        "allow_patterns": [
+            "*.onnx",
+            "*.fst",
+            "lexicon.txt",
+            "tokens.txt",
+            "dict/*"
+        ]
+    },
+    {
+        "repo_id": "csukuangfj/sherpa-onnx-hifigan",
+        "local_dir": PROJECT_ROOT / "matcha-icefall-zh-baker",
+        "title": "Matcha-TTS Vocoder (声码器)",
+        "allow_patterns": [
+            "hifigan_v2.onnx"
+        ]
+    },
+    {
+        "repo_id": "csukuangfj/kokoro-multi-lang-v1_1",
+        "local_dir": PROJECT_ROOT / "kokoro-multi-lang-v1_1",
+        "title": "Kokoro-82M 拟真人声中英语音合成模型",
+        "allow_patterns": [
+            "*.onnx",
+            "voices.bin",
+            "tokens.txt",
+            "lexicon-us-en.txt",
+            "lexicon-zh.txt",
+            "espeak-ng-data/*"
+        ]
+    },
+    {
         "repo_id": "csukuangfj/vits-melo-tts-zh_en",
         "local_dir": PROJECT_ROOT / "vits-melo-tts-zh_en",
+        "title": "VITS MeloTTS 中英双语语音合成模型 (备用)",
         "allow_patterns": [
             "model.int8.onnx",
             "model.onnx",

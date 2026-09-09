@@ -82,6 +82,12 @@ class SpeechManager(private val context: Context) {
                 asrEngine.updateLanguage(lang)
             }
         }
+        managerScope.launch {
+            AppSettings.ttsModelId.collect { modelId ->
+                Log.i(TAG, "检测到 TTS 模型切换，开始重启 TTS 引擎: $modelId")
+                vitsEngine.switchModel(modelId)
+            }
+        }
     }
 
     private fun observeTtsStates() {

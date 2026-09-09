@@ -27,3 +27,15 @@ Script/.venv/
 /moss-tokenizer-nano/
 /sense-voice-int8/
 *.gguf
+
+# TTS Models
+/matcha-icefall-zh-baker/
+/kokoro-multi-lang-v1_1/
+/vits-melo-tts-zh_en/
+/vits-zh-aishell3/
+/llm/
+
+# Compressed Archives
+*.tar.bz2
+*.tar.gz
+*.zip

@@ -102,39 +102,24 @@ else
     echo "⚠️ 未在本地检测到完整的 sense-voice-int8 模型，请先运行: bash Script/download_all.sh"
 fi
 
-# 6. 推送 VITS MeloTTS 中英双语超清离线语音合成模型 (优先) 或 AISHELL-3
-MELO_TTS_DIR="$PROJECT_ROOT/vits-melo-tts-zh_en"
-VITS_TTS_DIR="$PROJECT_ROOT/vits-zh-aishell3"
-if [ -d "$MELO_TTS_DIR" ] && { [ -f "$MELO_TTS_DIR/model.int8.onnx" ] || [ -f "$MELO_TTS_DIR/model.onnx" ]; }; then
-    if ask_push "VITS MeloTTS 语音合成模型"; then
-        MELO_MODEL_FILE="$MELO_TTS_DIR/model.int8.onnx"
-        [ ! -f "$MELO_MODEL_FILE" ] && MELO_MODEL_FILE="$MELO_TTS_DIR/model.onnx"
-        LOCAL_MELO_SIZE=$(get_local_file_size "$MELO_MODEL_FILE")
-        REMOTE_MELO_SIZE=$(get_remote_file_size "$TARGET_DIR/vits-melo-tts-zh_en/$(basename "$MELO_MODEL_FILE")")
+# 6. 推送 TTS 语音合成模型 (按配置推送)
+push_tts_model() {
+    local dir_name="$1"
+    local title="$2"
+    local TTS_DIR="$PROJECT_ROOT/$dir_name"
+    
+    if [ -d "$TTS_DIR" ]; then
+        if ask_push "$title"; then
+            echo "🚀 正在推送 $title 到手机..."
+            adb push "$TTS_DIR" "$TARGET_DIR/"
+            echo "✅ $title 推送完成！"
+        fi
+    fi
+}
 
-        if [ "$REMOTE_MELO_SIZE" = "$LOCAL_MELO_SIZE" ] && [ "$LOCAL_MELO_SIZE" -gt 0 ]; then
-            echo "⚡ 远端已存在完整 VITS MeloTTS 模型 ($((LOCAL_MELO_SIZE / 1024 / 1024))MB)，大小一致，跳过推送。"
-        else
-            echo "🚀 正在推送 VITS MeloTTS (44.1kHz 中英双语超清) 离线语音合成模型到手机..."
-            adb push "$MELO_TTS_DIR" "$TARGET_DIR/"
-            echo "✅ VITS MeloTTS 模型推送完成！"
-        fi
-    fi
-elif [ -d "$VITS_TTS_DIR" ] && [ -f "$VITS_TTS_DIR/vits-aishell3.int8.onnx" ]; then
-    if ask_push "VITS AISHELL-3 备用语音合成模型"; then
-        LOCAL_VITS_SIZE=$(get_local_file_size "$VITS_TTS_DIR/vits-aishell3.int8.onnx")
-        REMOTE_VITS_SIZE=$(get_remote_file_size "$TARGET_DIR/vits-zh-aishell3/vits-aishell3.int8.onnx")
-        if [ "$REMOTE_VITS_SIZE" = "$LOCAL_VITS_SIZE" ] && [ "$LOCAL_VITS_SIZE" -gt 0 ]; then
-            echo "⚡ 远端已存在完整 VITS AISHELL-3 模型 ($((LOCAL_VITS_SIZE / 1024 / 1024))MB)，大小一致，跳过推送。"
-        else
-            echo "🚀 正在推送备用 VITS AISHELL-3 离线语音合成模型到手机..."
-            adb push "$VITS_TTS_DIR" "$TARGET_DIR/"
-            echo "✅ VITS-TTS 模型推送完成！"
-        fi
-    fi
-else
-    echo "⚠️ 未在本地检测到完整的 TTS 模型，请先运行: python3 Script/download_models.py"
-fi
+push_tts_model "matcha-icefall-zh-baker" "Matcha-TTS 极速纯净中文语音合成模型"
+push_tts_model "kokoro-multi-lang-v1_1" "Kokoro-82M 拟真人声中英语音合成模型"
+push_tts_model "vits-melo-tts-zh_en" "VITS MeloTTS 中英双语语音合成模型"
 
 # 7. 推送 LLM 大语言模型权重
 GGUF_FILES=()

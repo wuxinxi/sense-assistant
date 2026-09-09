@@ -83,6 +83,7 @@ object AppSettings {
     private const val KEY_TTS_SPEECH_RATE = "key_tts_speech_rate"
     private const val KEY_TTS_PITCH = "key_tts_pitch"
     private const val KEY_TTS_SPEAKER_ID = "key_tts_speaker_id"
+    private const val KEY_TTS_MODEL_ID = "key_tts_model_id"
     private const val KEY_HAPTIC_ENABLED = "key_haptic_enabled"
     private const val KEY_LOCAL_SERVER_ENABLED = "key_local_server_enabled"
 
@@ -125,6 +126,9 @@ object AppSettings {
     private val _ttsSpeakerId = MutableStateFlow(0)
     val ttsSpeakerId: StateFlow<Int> = _ttsSpeakerId.asStateFlow()
 
+    private val _ttsModelId = MutableStateFlow("vits-melo-tts-zh_en")
+    val ttsModelId: StateFlow<String> = _ttsModelId.asStateFlow()
+
     private val _hapticEnabled = MutableStateFlow(true)
     val hapticEnabled: StateFlow<Boolean> = _hapticEnabled.asStateFlow()
 
@@ -155,9 +159,17 @@ object AppSettings {
         _ttsSpeechRate.value = prefs.getFloat(KEY_TTS_SPEECH_RATE, 1.0f)
         _ttsPitch.value = prefs.getFloat(KEY_TTS_PITCH, 1.0f)
         _ttsSpeakerId.value = prefs.getInt(KEY_TTS_SPEAKER_ID, 0).coerceIn(0, 173)
+        _ttsModelId.value = prefs.getString(KEY_TTS_MODEL_ID, "vits-melo-tts-zh_en") ?: "vits-melo-tts-zh_en"
 
         _hapticEnabled.value = prefs.getBoolean(KEY_HAPTIC_ENABLED, true)
         _localServerEnabled.value = prefs.getBoolean(KEY_LOCAL_SERVER_ENABLED, true)
+    }
+
+    fun setTtsModelId(modelId: String) {
+        _ttsModelId.value = modelId
+        if (::prefs.isInitialized) {
+            prefs.edit().putString(KEY_TTS_MODEL_ID, modelId).apply()
+        }
     }
 
     fun setThemeMode(mode: ThemeMode) {

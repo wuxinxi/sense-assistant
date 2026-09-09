@@ -38,7 +38,7 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
 
     init {
         engineScope.launch {
-            initEngine()
+            initEngine(cn.xxstudy.assistant.data.AppSettings.ttsModelId.value)
         }
     }
 
@@ -48,7 +48,15 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
     private val _numSpeakers = MutableStateFlow(1)
     val numSpeakers: StateFlow<Int> = _numSpeakers.asStateFlow()
 
-    suspend fun initEngine(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun switchModel(modelId: String) {
+        cancelCurrent()
+        tts?.release()
+        tts = null
+        _isReady.value = false
+        initEngine(modelId)
+    }
+
+    suspend fun initEngine(modelId: String = "vits-melo-tts-zh_en"): Boolean = withContext(Dispatchers.IO) {
         if (_isReady.value && tts != null) return@withContext true
 
         val extFiles = context.getExternalFilesDir(null)
@@ -56,10 +64,8 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
         val pkg = context.packageName
 
         val modelSubdirs = listOf(
-            "models/vits-melo-tts-zh_en",
-            "vits-melo-tts-zh_en",
-            "models/vits-zh-aishell3",
-            "vits-zh-aishell3"
+            "models/$modelId",
+            modelId
         )
 
         val candidates = mutableListOf<File>()
@@ -76,68 +82,93 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
 
         var foundDir: File? = null
         for (dir in candidates.distinct()) {
-            val modelFile = when {
-                File(dir, "model.onnx").exists() -> File(dir, "model.onnx")
-                File(dir, "model.int8.onnx").exists() -> File(dir, "model.int8.onnx")
-                File(dir, "vits-aishell3.int8.onnx").exists() -> File(dir, "vits-aishell3.int8.onnx")
-                File(dir, "vits-aishell3.onnx").exists() -> File(dir, "vits-aishell3.onnx")
-                else -> null
-            }
-            val lexiconFile = File(dir, "lexicon.txt")
-            val tokensFile = File(dir, "tokens.txt")
-
-            if (modelFile != null && modelFile.canRead() && lexiconFile.exists() && tokensFile.exists()) {
+            if (dir.exists() && dir.isDirectory && File(dir, "tokens.txt").exists()) {
                 foundDir = dir
-                Log.i(TAG, "🎯 定位到 VITS 离线模型: ${modelFile.absolutePath}")
+                Log.i(TAG, "🎯 定位到 TTS 离线模型目录: ${dir.absolutePath}")
                 break
             }
         }
 
         if (foundDir == null) {
-            Log.w(TAG, "⚠️ VITS 模型未找到，请先运行 push_models_to_phone.sh 推送")
+            Log.w(TAG, "⚠️ TTS 模型未找到: $modelId，请先运行 push_models_to_phone.sh 推送")
             _isReady.value = false
             return@withContext false
         }
 
         try {
             val tStart = System.currentTimeMillis()
-            val isMelo = foundDir.name.contains("melo", ignoreCase = true) || foundDir.parentFile?.name?.contains("melo", ignoreCase = true) == true
+            val isMelo = modelId.contains("melo", ignoreCase = true)
             _isBilingual.value = isMelo
 
-            val modelFile = when {
-                File(foundDir, "model.onnx").exists() -> File(foundDir, "model.onnx")
-                File(foundDir, "model.int8.onnx").exists() -> File(foundDir, "model.int8.onnx")
-                File(foundDir, "vits-aishell3.int8.onnx").exists() -> File(foundDir, "vits-aishell3.int8.onnx")
-                File(foundDir, "vits-aishell3.onnx").exists() -> File(foundDir, "vits-aishell3.onnx")
-                else -> File(foundDir, "model.onnx")
+            var modelConfig = OfflineTtsModelConfig(numThreads = 2, debug = false, provider = "cpu")
+
+            if (modelId.contains("matcha", ignoreCase = true)) {
+                val acousticFile = File(foundDir, "model-steps-3.onnx").takeIf { it.exists() }
+                    ?: File(foundDir, "model.onnx")
+                val vocoderFile = File(foundDir, "hifigan_v2.onnx").takeIf { it.exists() }
+                    ?: File(foundDir, "vocos.onnx")
+                
+                modelConfig = modelConfig.copy(
+                    matcha = OfflineTtsMatchaModelConfig(
+                        acousticModel = acousticFile.absolutePath,
+                        vocoder = vocoderFile.absolutePath,
+                        lexicon = File(foundDir, "lexicon.txt").absolutePath,
+                        tokens = File(foundDir, "tokens.txt").absolutePath,
+                        dictDir = File(foundDir, "dict").absolutePath,
+                        noiseScale = 1.0f,
+                        lengthScale = 1.0f,
+                        dataDir = ""
+                    )
+                )
+            } else if (modelId.contains("kokoro", ignoreCase = true)) {
+                val kokoroLexiconUs = File(foundDir, "lexicon-us-en.txt")
+                val kokoroLexiconZh = File(foundDir, "lexicon-zh.txt")
+                val kokoroLexicons = mutableListOf<String>()
+                if (kokoroLexiconUs.exists()) kokoroLexicons.add(kokoroLexiconUs.absolutePath)
+                if (kokoroLexiconZh.exists()) kokoroLexicons.add(kokoroLexiconZh.absolutePath)
+                val kokoroLexiconStr = if (kokoroLexicons.isNotEmpty()) {
+                    kokoroLexicons.joinToString(",")
+                } else {
+                    File(foundDir, "lexicon.txt").absolutePath
+                }
+
+                modelConfig = modelConfig.copy(
+                    kokoro = OfflineTtsKokoroModelConfig(
+                        model = File(foundDir, "kokoro-multi-lang-v1_1.onnx").takeIf { it.exists() }?.absolutePath
+                            ?: File(foundDir, "model.onnx").absolutePath,
+                        voices = File(foundDir, "voices.bin").absolutePath,
+                        tokens = File(foundDir, "tokens.txt").absolutePath,
+                        dataDir = File(foundDir, "espeak-ng-data").absolutePath,
+                        dictDir = "",
+                        lexicon = kokoroLexiconStr,
+                        lengthScale = 1.0f
+                    )
+                )
+            } else {
+                // VITS
+                val modelFile = File(foundDir, "model.int8.onnx").takeIf { it.exists() }
+                    ?: File(foundDir, "model.onnx")
+                val dictDir = File(foundDir, "dict")
+                val dictDirPath = if (dictDir.exists() && dictDir.isDirectory) dictDir.absolutePath else ""
+
+                modelConfig = modelConfig.copy(
+                    vits = OfflineTtsVitsModelConfig(
+                        model = modelFile.absolutePath,
+                        lexicon = File(foundDir, "lexicon.txt").absolutePath,
+                        tokens = File(foundDir, "tokens.txt").absolutePath,
+                        dataDir = "",
+                        dictDir = dictDirPath,
+                        noiseScale = 0.667f,
+                        noiseScaleW = 0.8f,
+                        lengthScale = 1.0f
+                    )
+                )
             }
-            val lexiconFile = File(foundDir, "lexicon.txt")
-            val tokensFile = File(foundDir, "tokens.txt")
-            val dictDir = File(foundDir, "dict")
-            val dictDirPath = if (dictDir.exists() && dictDir.isDirectory) dictDir.absolutePath else ""
 
             val ruleFstNames = listOf("date.fst", "number.fst", "phone.fst", "new_heteronym.fst")
             val ruleFsts = ruleFstNames.map { File(foundDir, it) }
                 .filter { it.exists() }
                 .joinToString(",") { it.absolutePath }
-
-            val vitsConfig = OfflineTtsVitsModelConfig(
-                model = modelFile.absolutePath,
-                lexicon = lexiconFile.absolutePath,
-                tokens = tokensFile.absolutePath,
-                dataDir = "",
-                dictDir = dictDirPath,
-                noiseScale = 0.667f,
-                noiseScaleW = 0.8f,
-                lengthScale = 1.0f
-            )
-
-            val modelConfig = OfflineTtsModelConfig(
-                vits = vitsConfig,
-                numThreads = 2,
-                debug = false,
-                provider = "cpu"
-            )
 
             val ttsConfig = OfflineTtsConfig(
                 model = modelConfig,
@@ -155,7 +186,7 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
             _isReady.value = true
 
             val elapsed = System.currentTimeMillis() - tStart
-            Log.i(TAG, "✅ VITS TTS 引擎初始化成功: isMelo=$isMelo, model=${modelFile.name}, sampleRate=$sampleRate, speakers=$totalSpeakers, dictDir=$dictDirPath, 耗时=${elapsed}ms")
+            Log.i(TAG, "✅ TTS 引擎初始化成功: modelId=$modelId, isMelo=$isMelo, sampleRate=$sampleRate, speakers=$totalSpeakers, 耗时=${elapsed}ms")
             true
         } catch (e: Exception) {
             Log.e(TAG, "❌ 初始化 VITS TTS 失败: ${e.message}", e)

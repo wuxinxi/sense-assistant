@@ -5,7 +5,7 @@
   <img src="https://img.shields.io/badge/Arch-ARM64--v8a%20(NEON%20%2B%20dotprod)-blue.svg" alt="Arch">
   <img src="https://img.shields.io/badge/ASR-SenseVoice%20Small%20INT8-cyan.svg" alt="ASR">
   <img src="https://img.shields.io/badge/LLM-llama.cpp%20C%2B%2B17%20(MiniCPM5%20%2F%20Qwen2.5)-orange.svg" alt="LLM">
-  <img src="https://img.shields.io/badge/TTS-MeloTTS%2044.1kHz%20Bilingual-magenta.svg" alt="TTS">
+  <img src="https://img.shields.io/badge/TTS-MeloTTS%20%2F%20Kokoro%20%2F%20Matcha-magenta.svg" alt="TTS">
   <img src="https://img.shields.io/badge/Speed-36%20tokens%2Fs%20(Pure%20CPU)-red.svg" alt="Speed">
   <img src="https://img.shields.io/badge/Microservice-Ktor%20%2B%20SSE-purple.svg" alt="Server">
   <img src="https://img.shields.io/badge/Privacy-100%25%20Offline%20Edge-success.svg" alt="Privacy">
@@ -41,12 +41,13 @@
   - **外科手术式 KV Cache 切除 (B1 算法)**：针对深度思考模型独创的动态显存截断技术，每轮对话后自动从底层 `llama_memory` 中定位 `<|thought_begin|>` 到 `<|thought_end|>` 的索引边界，将冗长的内部思考“记忆”精准切除，彻底根治上下文膨胀与 OOM 问题；
   - **硬件级 Logit Bias 镇压**：当用户在设置中关闭推理思考时，底层引擎会在采样链最前端（`llama_sampler_init_logit_bias`），从物理层面将思考起始符的分布概率强制压制为 `-INFINITY`，突破 RLHF 固化肌肉记忆，实现 100% 确定性的思考阻断；
   - 硬解 ARMv8.2-A `+dotprod` 专有向量点积指令，纯 CPU 峰值推理达到极速吞吐。
-- 🔊 **MeloTTS 44.1kHz 高保真中英双语语音合成 (TTS)**：
-  - 基于新一代 `sherpa-onnx` VITS 引擎，深度适配 **MeloTTS-zh_en**（44.1kHz CD 级超清采样率）；
-  - 支持中英文无缝混读（如自然朗读 "AI", "Python", "Android" 等专有名词），内置 **5 款精调人声预设**（温暖陪伴、知性女声、干练女声、活力男声、沉稳男声），支持语速与音调无级调节；
-  - **ARM64 NEON SIMD 硬件级加速**：FP32 纯 CPU 推理 Real-Time Factor (RTF) 达 **0.850**（低于 1.0 即合成速度快于播放速度），彻底根治音频下溢卡顿（AudioTrack Underrun）；
-  - **标点优先流式断句 (Strict Punctuation-First)**：首个逗号/句号即发声，日常问候短句仅需 **~640ms 极速出声**，彻底避免中文词组生硬截断与英文碎片化；
-  - **单调递增 Token 抢占式打断**：底层基于原子代数与互斥机制，新提问或打断瞬间清空音频流水线并停止合成，保证纳秒级静音响应。
+- 🔊 **TTS 引擎动态热插拔与离线高保真语音合成**：
+  - 基于新一代 `sherpa-onnx` 引擎，支持多种顶级开源 TTS 模型**毫秒级即刻热重载**，告别系统机械发音：
+    - **Kokoro-82M**：Transformer 架构的极致拟真王者。仅 82MB 体积却能迸发出带有真实人类呼吸感、断句顿挫与自然情感的中英混读，听感直逼云端大厂收费 API。
+    - **Matcha-TTS**：Flow-Matching 纯净极速引擎。极度轻量、不拖泥带水，适合追求极限响应速度的场景（纯中文）。
+    - **MeloTTS 44.1kHz**：VITS 架构超清引擎。内置 5 款精调人声预设（御姐/萝莉/书生等），支持语速与音调的独立无级调节。
+  - **标点优先流式断句 (Strict Punctuation-First)**：首个逗号/句号即触发音频渲染，日常问候短句仅需 **~640ms 极速出声**，彻底根治长句合成带来的高延迟真空期与中文词组生硬截断；
+  - **单调递增 Token 抢占式硬件打断**：底层维护全局原子代数，当发生用户插话（Barge-in）或模型生成新纪元（Generation）时，纳秒级拦截并丢弃即将回流的 PCM 脏数据，同时毫秒级 `flush` 声卡缓冲队列，根绝任何残余语音重叠。
 - 🎨 **商业级极简交互与专业 Markdown 渲染引擎**：
   - 底部极简胶囊栏（`DoubaoInputBar`），支持**“单击切换键盘 / 长按语音输入”**双模手势体系；
   - 36 频段自适应动效声浪面板（`DoubaoVoicePanel`），实时跟随麦克风输入分贝流畅律动；
@@ -96,7 +97,7 @@ flowchart TD
 
     subgraph TTS["离线高保真语音合成 (sherpa-onnx & AudioTrack)"]
         Chunker["SentenceChunker (标点优先流式分句)"]
-        VitsEngine["VitsTtsEngine (MeloTTS 44.1kHz FP32)"]
+        VitsEngine["VitsTtsEngine (Kokoro / Melo / Matcha 热插拔)"]
         TrackPlayer["TtsAudioTrackPlayer (硬件音调去重/流式播放)"]
         Speaker["🔊 扬声器输出 (44.1kHz Hi-Fi)"]
     end
@@ -396,7 +397,7 @@ app-sense-assistant/
 
 ## 🗺️ 后续演进规划 (Roadmap)
 
-- [x] **端侧离线语音合成 (TTS) 深度适配**：集成 MeloTTS 44.1kHz 中英双语高保真引擎与 NEON SIMD 加速，实现“听-想-说”一体的全闭环；
+- [x] **端侧离线语音合成 (TTS) 深度适配**：集成 Kokoro, Matcha, MeloTTS 等高保真引擎与多模型热插拔架构，实现“听-想-说”一体的全闭环；
 - [ ] **NPU / GPU 硬件加速探索**：基于 Qualcomm QNN 或 OpenCL / Vulkan 尝试激活 Adreno GPU 协同推理；
 - [ ] **长上下文 KV Cache 压缩**：针对移动端内存压力，研究 Context 滚动窗口与滑动截断策略。
 

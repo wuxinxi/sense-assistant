@@ -143,6 +143,7 @@ fun SettingsScreen(
 
     // Dialog 状态控制
     var showModelSelectDialog by remember { mutableStateOf(false) }
+    var showTtsModelSelectDialog by remember { mutableStateOf(false) }
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
     var showCreditsDialog by remember { mutableStateOf(false) }
@@ -365,8 +366,10 @@ fun SettingsScreen(
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        val ttsModelId by AppSettings.ttsModelId.collectAsState()
+
                         // 1. 发音人音色选择 (MeloTTS 专属超清卡片 或 AISHELL-3 多音色选择)
-                        if (isBilingualTts && ttsNumSpeakers <= 1) {
+                        if (ttsModelId.contains("melo", ignoreCase = true)) {
                             val activeMeloPreset = MELO_VOICE_PRESETS.find {
                                 kotlin.math.abs(it.pitch - ttsPitch) < 0.04f && kotlin.math.abs(it.speechRate - ttsSpeechRate) < 0.05f
                             }
@@ -463,7 +466,7 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                        } else {
+                        } else if (ttsNumSpeakers > 1) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -473,7 +476,7 @@ fun SettingsScreen(
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 // 标题栏：发音人音色与当前选中标签
-                                val activeCurated = OFFICIAL_CURATED_SPEAKERS.find { it.id == ttsSpeakerId }
+                                val activeCurated = if (ttsModelId.contains("aishell3")) OFFICIAL_CURATED_SPEAKERS.find { it.id == ttsSpeakerId } else null
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -508,12 +511,21 @@ fun SettingsScreen(
                                 }
 
                                 // 官方精选推荐 (横向滑动胶囊)
+                                if (ttsModelId.contains("aishell3")) {
                                 Text(
                                     text = "官方精选推荐 (基于 AISHELL-3 官方语料)",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = MaterialTheme.colorScheme.primary
                                 )
+                            } else {
+                                Text(
+                                    text = "内置角色清单 (基于 " + ttsNumSpeakers + " 个可用音色)",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
 
                                 Row(
                                     modifier = Modifier
@@ -521,7 +533,7 @@ fun SettingsScreen(
                                         .horizontalScroll(rememberScrollState()),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    OFFICIAL_CURATED_SPEAKERS.forEach { speaker ->
+                                    if (ttsModelId.contains("aishell3")) { OFFICIAL_CURATED_SPEAKERS.forEach { speaker ->
                                         val isSelected = (ttsSpeakerId == speaker.id)
                                         FilterChip(
                                             selected = isSelected,
@@ -558,7 +570,7 @@ fun SettingsScreen(
                                             )
                                         )
                                     }
-                                }
+                                } }
 
                                 HorizontalDivider(
                                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
@@ -572,7 +584,7 @@ fun SettingsScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "全量微调 (0 ~ 173)",
+                                        text = "全量微调 (0 ~ ${ttsNumSpeakers - 1})",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -604,8 +616,8 @@ fun SettingsScreen(
                                         onValueChange = {
                                             AppSettings.setTtsSpeakerId(it.roundToInt())
                                         },
-                                        valueRange = 0f..173f,
-                                        steps = 172,
+                                        valueRange = 0f..(ttsNumSpeakers - 1).toFloat().coerceAtLeast(1f),
+                                        steps = (ttsNumSpeakers - 2).coerceAtLeast(0),
                                         modifier = Modifier.weight(1f)
                                     )
 
@@ -614,7 +626,7 @@ fun SettingsScreen(
                                             triggerHaptic()
                                             AppSettings.setTtsSpeakerId(ttsSpeakerId + 1)
                                         },
-                                        enabled = ttsSpeakerId < 173,
+                                        enabled = ttsSpeakerId < (ttsNumSpeakers - 1),
                                         modifier = Modifier.size(32.dp)
                                     ) {
                                         Icon(Icons.Default.Add, contentDescription = "下一音色", modifier = Modifier.size(16.dp))
@@ -640,25 +652,27 @@ fun SettingsScreen(
                             )
                         }
 
-                        // 音调滑杆
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("朗读音调", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                Text("${((ttsPitch * 10).roundToInt() / 10.0)}x", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Slider(
-                                value = ttsPitch,
-                                onValueChange = { AppSettings.setTtsPitch(it) },
-                                valueRange = 0.5f..2.0f,
-                                steps = 14
-                            )
-                        }
-
-                        // 试听按钮
-                        val activeMeloPreset = if (isBilingualTts && ttsNumSpeakers <= 1) {
+                        if (ttsModelId.contains("melo", ignoreCase = true) || ttsModelId.contains("aishell3", ignoreCase = true)) {
+                            // 音调滑杆
+                                                    Column {
+                                                        Row(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            horizontalArrangement = Arrangement.SpaceBetween
+                                                        ) {
+                                                            Text("朗读音调", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                                            Text("${((ttsPitch * 10).roundToInt() / 10.0)}x", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                                                        }
+                                                        Slider(
+                                                            value = ttsPitch,
+                                                            onValueChange = { AppSettings.setTtsPitch(it) },
+                                                            valueRange = 0.5f..2.0f,
+                                                            steps = 14
+                                                        )
+                                                    }
+                            
+                                                    // 试听按钮
+                                                    }
+                        val activeMeloPreset = if (ttsModelId.contains("melo", ignoreCase = true)) {
                             MELO_VOICE_PRESETS.find {
                                 kotlin.math.abs(it.pitch - ttsPitch) < 0.04f && kotlin.math.abs(it.speechRate - ttsSpeechRate) < 0.05f
                             }
@@ -666,7 +680,7 @@ fun SettingsScreen(
                         val activeSpeaker = OFFICIAL_CURATED_SPEAKERS.find { it.id == ttsSpeakerId }
                         val speakerLabel = if (activeMeloPreset != null) {
                             "MeloTTS · ${activeMeloPreset.name}"
-                        } else if (isBilingualTts) {
+                        } else if (ttsModelId.contains("melo", ignoreCase=true) || ttsModelId.contains("kokoro", ignoreCase=true)) {
                             "MeloTTS 自定义微调"
                         } else if (activeSpeaker != null) {
                             "${activeSpeaker.name} (${activeSpeaker.role})"
@@ -685,7 +699,7 @@ fun SettingsScreen(
                                         "你好呀！我是本地部署的 AI 大模型，元气少女音色测试就绪！"
                                     } else if (activeMeloPreset?.id == "scholar") {
                                         "学而不思则罔，思而不学则殆。我是本地部署的 AI 大模型。"
-                                    } else if (isBilingualTts) {
+                                    } else if (ttsModelId.contains("melo", ignoreCase=true) || ttsModelId.contains("kokoro", ignoreCase=true)) {
                                         "我是本地部署的 AI 大模型，随时为你解答 Python 和 Android 开发问题。"
                                     } else {
                                         "您好！这是当前的 ${speakerLabel} 音效测试。我正在本地离线运行。"
@@ -748,6 +762,26 @@ fun SettingsScreen(
                         showModelSelectDialog = true
                     }
                 )
+
+
+                SettingItemRow(
+                    icon = Icons.Default.RecordVoiceOver,
+                    iconBgColor = Color(0xFFE91E63),
+                    title = "离线语音合成模型 (TTS)",
+                    subtitle = listOf(
+                        "vits-melo-tts-zh_en" to "MeloTTS (中英混读 / VITS)",
+                        "matcha-icefall-zh-baker" to "Matcha-TTS (纯净极速 / Flow-Matching)",
+                        "kokoro-multi-lang-v1_1" to "Kokoro-82M (极致拟真 / Transformer)"
+                    ).find { it.first == AppSettings.ttsModelId.collectAsState().value }?.second ?: AppSettings.ttsModelId.collectAsState().value,
+                    trailing = {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+                    },
+                    onClick = {
+                        triggerHaptic()
+                        showTtsModelSelectDialog = true
+                    }
+                )
+
 
                 SettingRowDivider()
 
@@ -1131,6 +1165,65 @@ fun SettingsScreen(
     // ============================================================
     // 弹窗 0: 大语言模型选择器
     // ============================================================
+    
+    // ============================================================
+    // 弹窗 1: 离线语音合成模型 (TTS) 选择器
+    // ============================================================
+    if (showTtsModelSelectDialog) {
+        val ttsModelId by AppSettings.ttsModelId.collectAsState()
+        val ttsOptions = listOf(
+            "vits-melo-tts-zh_en" to "MeloTTS (中英混读 / VITS)",
+            "matcha-icefall-zh-baker" to "Matcha-TTS (纯净极速 / Flow-Matching)",
+            "kokoro-multi-lang-v1_1" to "Kokoro-82M (极致拟真 / Transformer)"
+        )
+        AlertDialog(
+            onDismissRequest = { showTtsModelSelectDialog = false },
+            title = { Text("选择离线语音合成模型 (TTS)", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "切换模型后将立即热重载底层引擎。请确保相应模型文件已存在于手机本地沙盒中。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    ttsOptions.forEach { (id, title) ->
+                        val isSelected = (ttsModelId == id)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                                .clickable {
+                                    triggerHaptic()
+                                    AppSettings.setTtsModelId(id)
+                                    showTtsModelSelectDialog = false
+                                }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text(id, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTtsModelSelectDialog = false }) {
+                    Text("关闭")
+                }
+            }
+        )
+    }
+
     if (showModelSelectDialog) {
         val models = cn.xxstudy.assistant.data.ModelType.values()
         AlertDialog(
