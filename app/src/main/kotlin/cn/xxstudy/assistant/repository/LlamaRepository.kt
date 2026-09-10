@@ -17,16 +17,29 @@ class LlamaRepository {
      * 异步加载大模型
      *
      * @param modelPath GGUF 物理文件在安卓系统中的绝对路径
+     * @param nCtx 多轮对话上下文窗口大小
      * @return 是否成功装载进内存
      */
-    suspend fun loadModel(modelPath: String): Boolean {
-        // withContext 确保这个耗时的 C++ 方法跑在后台线程
+    suspend fun loadModel(modelPath: String, nCtx: Int): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                engine.initContext(modelPath)
+                engine.initContext(modelPath, nCtx)
             } catch (e: Exception) {
                 e.printStackTrace()
                 false
+            }
+        }
+    }
+
+    /**
+     * 重置对话上下文，开启新对话
+     */
+    suspend fun resetSession() {
+        withContext(Dispatchers.IO) {
+            try {
+                engine.resetSession()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
@@ -46,6 +59,17 @@ class LlamaRepository {
                 e.printStackTrace()
                 "底层引擎错误: ${e.message}"
             }
+        }
+    }
+
+    /**
+     * 主动打断当前推理
+     */
+    fun stopGeneration() {
+        try {
+            engine.stopGeneration()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }

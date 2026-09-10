@@ -14,7 +14,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -55,6 +55,9 @@ android {
 }
 
 dependencies {
+    // 本地原生预编译 AAR / JAR 依赖 (如 sherpa-onnx 离线语音识别底座)
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
@@ -76,4 +79,8 @@ dependencies {
     implementation("io.ktor:ktor-server-core:$ktorVersion")
     implementation("io.ktor:ktor-server-cio:$ktorVersion")
     implementation("io.ktor:ktor-server-cors:$ktorVersion")
+    
+    // Markdown parser
+    implementation("com.halilibo.compose-richtext:richtext-commonmark:0.17.0")
+    implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.17.0")
 }

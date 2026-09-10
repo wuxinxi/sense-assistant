@@ -15,3 +15,27 @@
 local.properties
 /.idea/
 /.kotlin/
+
+# Python Virtual Environments
+.venv/
+Script/.venv/
+**/__pycache__/
+*.pyc
+
+# Local Model Weights & Cache
+/moss-tts-nano/
+/moss-tokenizer-nano/
+/sense-voice-int8/
+*.gguf
+
+# TTS Models
+/matcha-icefall-zh-baker/
+/kokoro-multi-lang-v1_1/
+/vits-melo-tts-zh_en/
+/vits-zh-aishell3/
+/llm/
+
+# Compressed Archives
+*.tar.bz2
+*.tar.gz
+*.zip
