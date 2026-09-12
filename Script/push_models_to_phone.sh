@@ -21,7 +21,8 @@ fi
 
 # 2. 检查设备连接
 echo "🔍 正在检测 USB 连接设备..."
-DEVICE_COUNT=$(adb devices | grep -v "List" | grep "device$" | wc -l | tr -d ' ')
+ACTIVE_DEVICES=($(adb devices | grep -v "List" | grep "device$" | awk '{print $1}'))
+DEVICE_COUNT=${#ACTIVE_DEVICES[@]}
 
 if [ "$DEVICE_COUNT" -eq 0 ]; then
     echo "⚠️ 未检测到已授权的 Android 设备，请确保："
@@ -30,7 +31,13 @@ if [ "$DEVICE_COUNT" -eq 0 ]; then
     exit 1
 fi
 
-echo "✅ 已连接 $DEVICE_COUNT 台设备。"
+# 自动绑定唯一活跃设备，彻底隔绝 offline 幽灵设备干扰
+if [ -z "$ANDROID_SERIAL" ] && [ "$DEVICE_COUNT" -eq 1 ]; then
+    export ANDROID_SERIAL="${ACTIVE_DEVICES[0]}"
+    echo "📱 自动绑定目标设备: $ANDROID_SERIAL"
+fi
+
+echo "✅ 已连接 $DEVICE_COUNT 台可用设备。"
 
 # 获取本地文件真实字节大小（处理 macOS 与 Linux 差异，并追踪软链接）
 get_local_file_size() {
