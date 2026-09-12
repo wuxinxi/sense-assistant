@@ -64,6 +64,16 @@ enum class ModelType(
         expectedSizeBytes = 491400032L,
         supportsThinking = false,
         description = "极速轻量问答，内存开销极低"
+    ),
+    QWEN_0_5B_INTENT(
+        id = "qwen2.5_0.5b_intent",
+        displayName = "Qwen2.5-0.5B (意图专属 SFT)",
+        fileName = "qwen2.5-0.5b-intent-q4_k_m.gguf",
+        parameterSize = "0.5B",
+        memoryRequirement = "~450MB",
+        expectedSizeBytes = 397807456L,
+        supportsThinking = false,
+        description = "M1 Pro 定向微调版，支持智能家居/手机控制/多意图解析"
     )
 }
 
@@ -192,6 +202,13 @@ object AppSettings {
     fun setSystemPrompt(prompt: String) {
         _systemPrompt.value = prompt
         if (::prefs.isInitialized) prefs.edit().putString(KEY_SYSTEM_PROMPT, prompt).apply()
+    }
+
+    fun getEffectiveSystemPrompt(modelType: ModelType = _currentModelType.value): String {
+        if (modelType == ModelType.QWEN_0_5B_INTENT) {
+            return "你是一个运行在手机端侧的智能语音意图解析中枢。请根据用户的语音输入，精准解析其意图并输出标准 JSON 格式的操作指令。如果属于控制指令，输出相应的 action 与参数；如果属于日常问答闲聊，请直接进行亲和、简洁的中文对话回复。"
+        }
+        return _systemPrompt.value
     }
 
     fun setCurrentModelType(modelType: ModelType) {

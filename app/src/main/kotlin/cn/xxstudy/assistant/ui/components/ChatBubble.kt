@@ -59,6 +59,9 @@ fun ChatBubble(
             Spacer(modifier = Modifier.width(8.dp))
         }
 
+        val displayText = if (!msg.thinkingText.isNullOrBlank()) msg.text.trimStart() else msg.text
+        val parsedActions = if (!isUser && displayText.isNotBlank()) IntentParser.parse(displayText) else null
+
         Surface(
             shape = RoundedCornerShape(
                 topStart = 20.dp,
@@ -67,7 +70,11 @@ fun ChatBubble(
                 bottomEnd = if (isUser) 4.dp else 20.dp
             ),
             color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.widthIn(max = if (!isUser && !msg.thinkingText.isNullOrBlank()) 320.dp else 280.dp)
+            modifier = Modifier.widthIn(
+                max = if (isUser) 280.dp 
+                      else if (parsedActions != null || !msg.thinkingText.isNullOrBlank()) 340.dp 
+                      else 300.dp
+            )
         ) {
             Box(modifier = Modifier.padding(12.dp)) {
                 if (msg.isThinking && msg.thinkingText.isNullOrBlank()) {
@@ -92,20 +99,26 @@ fun ChatBubble(
                             }
                         }
 
-                        // 2. 正式回答正文
-                        val displayText = if (!msg.thinkingText.isNullOrBlank()) msg.text.trimStart() else msg.text
+                        // 2. 正式回答正文（支持意图指令胶囊卡片与标准 Markdown 文本）
                         if (displayText.isNotBlank()) {
-                            androidx.compose.runtime.CompositionLocalProvider(
-                                androidx.compose.material3.LocalContentColor provides if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                androidx.compose.material3.LocalTextStyle provides androidx.compose.ui.text.TextStyle(
-                                    fontSize = 15.sp,
-                                    lineHeight = 22.sp
+                            if (parsedActions != null) {
+                                IntentActionCard(
+                                    actions = parsedActions,
+                                    rawText = displayText
                                 )
-                            ) {
-                                com.halilibo.richtext.ui.material3.Material3RichText(
-                                    modifier = Modifier.padding(vertical = 4.dp)
+                            } else {
+                                androidx.compose.runtime.CompositionLocalProvider(
+                                    androidx.compose.material3.LocalContentColor provides if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    androidx.compose.material3.LocalTextStyle provides androidx.compose.ui.text.TextStyle(
+                                        fontSize = 15.sp,
+                                        lineHeight = 22.sp
+                                    )
                                 ) {
-                                    Markdown(displayText)
+                                    com.halilibo.richtext.ui.material3.Material3RichText(
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    ) {
+                                        Markdown(displayText)
+                                    }
                                 }
                             }
                         } else if (msg.thinkingText != null && msg.isThinkingActive) {

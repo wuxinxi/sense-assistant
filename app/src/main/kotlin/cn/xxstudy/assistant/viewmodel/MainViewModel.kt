@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 
 import cn.xxstudy.assistant.data.ModelType
 import cn.xxstudy.assistant.engine.ThinkingStreamParser
+import cn.xxstudy.assistant.ui.components.IntentParser
 
 data class ChatMessage(
     val id: Int,
@@ -218,7 +219,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             
             var finalPrompt = ""
             if (isFirstTurn) {
-                val sysText = AppSettings.systemPrompt.value
+                val sysText = AppSettings.getEffectiveSystemPrompt(currentModel)
                 finalPrompt += "<|im_start|>system\n$sysText"
                 if (!enableThinking && currentModel.supportsThinking) {
                     finalPrompt += "\n请直接给出最终回答，无需输出思考过程。"
@@ -236,13 +237,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             // 初始化 TTS 流式切句器（仅当开启答案语音朗读时）
             var chunker: cn.xxstudy.assistant.speech.SentenceChunker? = null
+            var isJsonStream = false
+            var hasDecidedStreamType = false
+            val bufferedPrefix = StringBuilder()
+
             if (AppSettings.ttsAutoPlay.value) {
                 chunker = speechManager.createSentenceChunker()
                 _speakingMessageId.value = thinkingId
-                // 核心安全绑定：仅在思维链解析器识别出真正的回答正文 (Answer) 时，才送入流式切句器合成语音！
-                // 彻底隔绝 <|thought_begin|> 以及所有内部思考过程，绝不朗读 AI 内心独白
+                // 核心安全绑定：
+                // 1. 仅在思维链解析器识别出真正的回答正文 (Answer) 时，才考虑送入流式切句器合成语音，彻底隔绝 <|thought_begin|>
+                // 2. 检测到模型输出意图控制指令（以 JSON 符号或代码块开头）时，阻断流式切句，防止 TTS 朗读大括号、引号等生硬代码
                 parser.onAnswerChunk = { answerChunk ->
-                    chunker.onToken(answerChunk)
+                    if (!hasDecidedStreamType) {
+                        bufferedPrefix.append(answerChunk)
+                        val textSoFar = bufferedPrefix.toString().trimStart()
+                        if (textSoFar.startsWith("[") || textSoFar.startsWith("{") || textSoFar.startsWith("```")) {
+                            isJsonStream = true
+                            hasDecidedStreamType = true
+                        } else if (textSoFar.length >= 6) {
+                            hasDecidedStreamType = true
+                            chunker.onToken(bufferedPrefix.toString())
+                            bufferedPrefix.clear()
+                        }
+                    } else if (!isJsonStream) {
+                        chunker.onToken(answerChunk)
+                    }
                 }
             }
 
@@ -288,8 +307,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 parser.finish()
                 val finalSnapshot = parser.getSnapshot()
 
-                // 冲刷切句器完成最后一句流式播报
-                chunker?.flush()
+                val actualText = finalSnapshot.answerText.ifBlank {
+                    if (finalSnapshot.thinkingText != null && !finalSnapshot.isThinkingActive) {
+                        // 如果仅有思考无正文
+                        ""
+                    } else {
+                        "（回复为空）"
+                    }
+                }
+
+                val parsedActions = IntentParser.parse(actualText)
+                if (parsedActions != null) {
+                    // 意图识别结果：使用优美自然的中文语音播报替代生硬冷冰冰的原始 JSON
+                    if (AppSettings.ttsAutoPlay.value) {
+                        val speechText = IntentParser.formatForSpeech(parsedActions)
+                        speakMessage(thinkingId, speechText)
+                    }
+                } else {
+                    // 普通文本：冲刷切句器完成最后一句流式播报
+                    if (!hasDecidedStreamType && bufferedPrefix.isNotEmpty()) {
+                        chunker?.onToken(bufferedPrefix.toString())
+                    }
+                    chunker?.flush()
+                }
 
                 // 推理完成后，附加上最终的性能指标
                 val parts = rawResponse.split("<|metrics|>")
@@ -299,15 +339,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "首字: ${j.optLong("ttft_ms")} ms | 耗时: ${j.optLong("total_ms")} ms | 速度: ${j.optDouble("speed")} tk/s"
                     } catch(e: Exception) { parts[1] }
                 } else null
-
-                val actualText = finalSnapshot.answerText.ifBlank {
-                    if (finalSnapshot.thinkingText != null && !finalSnapshot.isThinkingActive) {
-                        // 如果仅有思考无正文
-                        ""
-                    } else {
-                        "（回复为空）"
-                    }
-                }
 
                 val finalUpdatedList = _chatMessages.value.map {
                     if (it.id == thinkingId) {
@@ -322,9 +353,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _chatMessages.value = finalUpdatedList
 
-                // 注意：在流式生成期间，chunker 已经实时切句并完成了回答正文的播报。
-                // 只有在没有使用流式 chunker 的兜底情况下才整句播报，避免回答被重复朗读第二遍
-                if (chunker == null && AppSettings.ttsAutoPlay.value && actualText.isNotBlank() && actualText != "（回复为空）") {
+                // 兜底朗读：仅在未开启流式切句且非意图识别消息时执行整句播报
+                if (chunker == null && parsedActions == null && AppSettings.ttsAutoPlay.value && actualText.isNotBlank() && actualText != "（回复为空）") {
                     speakMessage(thinkingId, actualText)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -350,9 +380,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             speechManager.stopSpeaking()
             _speakingMessageId.value = null
         } else {
+            val parsedActions = IntentParser.parse(text)
+            val speechContent = if (parsedActions != null) {
+                IntentParser.formatForSpeech(parsedActions)
+            } else {
+                text
+            }
             _speakingMessageId.value = id
             speechManager.speak(
-                text = text,
+                text = speechContent,
                 speechRate = AppSettings.ttsSpeechRate.value,
                 pitch = AppSettings.ttsPitch.value,
                 utteranceId = id.toString(),
