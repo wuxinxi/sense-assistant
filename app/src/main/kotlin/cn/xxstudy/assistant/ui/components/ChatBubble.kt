@@ -61,6 +61,13 @@ fun ChatBubble(
 
         val displayText = if (!msg.thinkingText.isNullOrBlank()) msg.text.trimStart() else msg.text
         val parsedActions = if (!isUser && displayText.isNotBlank()) IntentParser.parse(displayText) else null
+        val trimmed = displayText.trim()
+        val isPotentialJson = !isUser && (
+            trimmed.startsWith("[") || 
+            trimmed.startsWith("{") || 
+            trimmed.startsWith("```json") || 
+            (trimmed.startsWith("```") && (trimmed.contains("\"action\"") || trimmed.contains("action")))
+        )
 
         Surface(
             shape = RoundedCornerShape(
@@ -72,7 +79,7 @@ fun ChatBubble(
             color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
             modifier = Modifier.widthIn(
                 max = if (isUser) 280.dp 
-                      else if (parsedActions != null || !msg.thinkingText.isNullOrBlank()) 340.dp 
+                      else if (parsedActions != null || isPotentialJson || !msg.thinkingText.isNullOrBlank()) 340.dp 
                       else 300.dp
             )
         ) {
@@ -106,6 +113,44 @@ fun ChatBubble(
                                     actions = parsedActions,
                                     rawText = displayText
                                 )
+                            } else if (isPotentialJson) {
+                                if (msg.metrics == null) {
+                                    // 正在流式生成或正在解析 JSON 指令中，屏蔽生硬代码块，显示优雅的状态提示
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 2.dp)
+                                    ) {
+                                        CircularProgressIndicator(
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(14.dp),
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "正在解析并准备执行操作指令...",
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                } else {
+                                    // 生成完毕但解析失败时才降级显示
+                                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                        Text(
+                                            text = "⚠️ 未能识别的指令报文",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.error,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = displayText,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                             } else {
                                 androidx.compose.runtime.CompositionLocalProvider(
                                     androidx.compose.material3.LocalContentColor provides if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,

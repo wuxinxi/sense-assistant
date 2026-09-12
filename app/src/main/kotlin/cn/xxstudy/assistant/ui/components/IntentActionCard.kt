@@ -211,7 +211,8 @@ object IntentParser {
  * 端侧操作指令分发与硬件调度执行器
  */
 object ActionExecutor {
-    fun execute(context: Context, item: ParsedAction): String {
+    fun execute(context: Context, item: ParsedAction, overrideState: String? = null): String {
+        val effectiveState = (overrideState ?: item.state ?: "on").lowercase()
         return try {
             when (item.action.lowercase()) {
                 "phone_settings" -> {
@@ -227,7 +228,7 @@ object ActionExecutor {
                                 } ?: cameraManager.cameraIdList.firstOrNull()
 
                                 if (cameraId != null) {
-                                    val turnOn = item.state?.lowercase() != "off"
+                                    val turnOn = effectiveState !in listOf("off", "close")
                                     cameraManager.setTorchMode(cameraId, turnOn)
                                     if (turnOn) "手电筒已开启" else "手电筒已关闭"
                                 } else {
@@ -240,7 +241,7 @@ object ActionExecutor {
                         "ringer_mode" -> {
                             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                             if (audioManager != null) {
-                                when (item.state?.lowercase()) {
+                                when (effectiveState) {
                                     "silent" -> {
                                         audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
                                         "已开启静音模式"
@@ -259,17 +260,13 @@ object ActionExecutor {
                         "volume" -> {
                             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                             if (audioManager != null) {
-                                val direction = if (item.adjustment?.contains("-") == true) {
-                                    AudioManager.ADJUST_LOWER
-                                } else {
-                                    AudioManager.ADJUST_RAISE
-                                }
+                                val isLower = item.adjustment?.contains("-") == true || effectiveState in listOf("lower", "down", "off")
                                 audioManager.adjustStreamVolume(
                                     AudioManager.STREAM_MUSIC,
-                                    direction,
+                                    if (isLower) AudioManager.ADJUST_LOWER else AudioManager.ADJUST_RAISE,
                                     AudioManager.FLAG_SHOW_UI
                                 )
-                                "已调节系统音量"
+                                if (isLower) "音量已减小" else "音量已调大"
                             } else "无法调节音量"
                         }
                         else -> {
@@ -279,6 +276,21 @@ object ActionExecutor {
                             "已打开系统设置"
                         }
                     }
+                }
+                "device_control" -> {
+                    val dev = item.device ?: item.target ?: "设备"
+                    val devCn = when (dev) {
+                        "living_room_light" -> "客厅大灯"
+                        "bedroom_ac" -> "卧室空调"
+                        "ac" -> "空调"
+                        "all_lights" -> "全屋灯光"
+                        "living_room_curtain" -> "客厅窗帘"
+                        "vacuum_robot" -> "扫地机器人"
+                        "air_purifier" -> "空气净化器"
+                        else -> dev
+                    }
+                    val isTurnOn = effectiveState !in listOf("off", "close", "dock")
+                    if (isTurnOn) "已打开 $devCn" else "已关闭 $devCn"
                 }
                 "app_launch" -> {
                     val pm = context.packageManager
@@ -325,9 +337,6 @@ object ActionExecutor {
                     } else {
                         "已记录备忘: ${item.label ?: item.content ?: "完成"}"
                     }
-                }
-                "device_control" -> {
-                    "已向本地智能网关发送指令"
                 }
                 else -> "指令已确认执行"
             }
@@ -398,7 +407,7 @@ fun IntentActionCard(
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             actions.forEach { ActionExecutor.execute(context, it) }
-                            Toast.makeText(context, "已触发执行 ${actions.size} 项指令", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "已重新执行 ${actions.size} 项指令", Toast.LENGTH_SHORT).show()
                         }
                 ) {
                     Row(
@@ -406,14 +415,14 @@ fun IntentActionCard(
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.PlayArrow,
+                            imageVector = Icons.Default.CheckCircle,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(12.dp)
                         )
-                        Spacer(modifier = Modifier.width(2.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
                         Text(
-                            text = "${actions.size} 项指令 (点此执行)",
+                            text = "已自动执行",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -488,25 +497,46 @@ private fun ActionItemRow(index: Int, item: ParsedAction) {
     val haptic = LocalHapticFeedback.current
     val (title, icon, iconBg) = getActionMeta(item.action)
 
-    var isExecuted by remember { mutableStateOf(false) }
+    // 是否为支持双向开闭的开关型意图（如手电筒、响铃、家居设备）
+    val isToggleable = when (item.action.lowercase()) {
+        "phone_settings" -> item.setting?.lowercase() in listOf("flashlight", "ringer_mode", "bluetooth", "wifi")
+        "device_control" -> true
+        else -> false
+    }
+
+    // 初始状态默认为模型解析的目标状态（后台已自动执行开启或关闭）
+    var activeState by remember(item) {
+        mutableStateOf((item.state ?: "on").lowercase())
+    }
     var executionFeedback by remember { mutableStateOf<String?>(null) }
+
+    val isOn = activeState !in listOf("off", "close", "dock", "silent")
+
+    fun doToggle() {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (isToggleable) {
+            val nextState = if (isOn) "off" else "on"
+            val res = ActionExecutor.execute(context, item, overrideState = nextState)
+            activeState = nextState
+            executionFeedback = res
+            Toast.makeText(context, res, Toast.LENGTH_SHORT).show()
+        } else {
+            val res = ActionExecutor.execute(context, item)
+            executionFeedback = res
+            Toast.makeText(context, res, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = if (isExecuted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+        color = if (isOn) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                 else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-        border = if (isExecuted) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
-                 else BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        border = if (isOn) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                 else BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                val res = ActionExecutor.execute(context, item)
-                isExecuted = true
-                executionFeedback = res
-                Toast.makeText(context, res, Toast.LENGTH_SHORT).show()
-            }
+            .clickable { doToggle() }
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -516,13 +546,13 @@ private fun ActionItemRow(index: Int, item: ParsedAction) {
                 modifier = Modifier
                     .size(36.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(iconBg.copy(alpha = 0.15f)),
+                    .background(if (isOn) iconBg.copy(alpha = 0.2f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = iconBg,
+                    tint = if (isOn) iconBg else MaterialTheme.colorScheme.outline,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -538,56 +568,66 @@ private fun ActionItemRow(index: Int, item: ParsedAction) {
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = formatActionSummary(item),
+                    text = formatActionSummary(item, activeState),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 16.sp
                 )
                 if (executionFeedback != null) {
-                    Spacer(modifier = Modifier.height(3.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "✓ $executionFeedback",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (isOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
                     )
                 }
             }
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // 右侧直观的操作触发按钮
-            FilledTonalButton(
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    val res = ActionExecutor.execute(context, item)
-                    isExecuted = true
-                    executionFeedback = res
-                    Toast.makeText(context, res, Toast.LENGTH_SHORT).show()
-                },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                modifier = Modifier.height(32.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = if (isExecuted) Color(0xFFE8F5E9) else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                    contentColor = if (isExecuted) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
-                )
-            ) {
-                if (isExecuted) {
+            // 右侧直观的状态切换开关按钮
+            if (isToggleable) {
+                FilledTonalButton(
+                    onClick = { doToggle() },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    modifier = Modifier.height(32.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = if (isOn) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                                         else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                        contentColor = if (isOn) MaterialTheme.colorScheme.error
+                                       else MaterialTheme.colorScheme.primary
+                    )
+                ) {
                     Icon(
-                        imageVector = Icons.Default.Check,
+                        imageVector = if (isOn) Icons.Default.PowerSettingsNew else Icons.Default.PlayArrow,
                         contentDescription = null,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(3.dp))
-                    Text("已执行", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                } else {
+                    Text(
+                        text = if (isOn) "关闭" else "打开",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                FilledTonalButton(
+                    onClick = { doToggle() },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    modifier = Modifier.height(32.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        contentColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
                     Icon(
-                        imageVector = Icons.Default.PlayArrow,
+                        imageVector = Icons.Default.Refresh,
                         contentDescription = null,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(3.dp))
-                    Text("执行", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("再次执行", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -604,8 +644,9 @@ private fun getActionMeta(action: String): Triple<String, ImageVector, Color> {
     }
 }
 
-private fun formatActionSummary(item: ParsedAction): String {
+private fun formatActionSummary(item: ParsedAction, currentState: String? = null): String {
     val parts = mutableListOf<String>()
+    val effectiveState = currentState ?: item.state
 
     when (item.action.lowercase()) {
         "device_control" -> {
@@ -621,7 +662,7 @@ private fun formatActionSummary(item: ParsedAction): String {
                 else -> dev
             }
             parts.add("设备: $devCn")
-            item.state?.let {
+            effectiveState?.let {
                 val stCn = when (it) {
                     "on" -> "开启"
                     "off" -> "关闭"
@@ -648,7 +689,7 @@ private fun formatActionSummary(item: ParsedAction): String {
                 else -> set
             }
             parts.add("设置项: $setCn")
-            item.state?.let {
+            effectiveState?.let {
                 val stCn = when (it) {
                     "on" -> "开启"
                     "off" -> "关闭"
@@ -696,7 +737,7 @@ private fun formatActionSummary(item: ParsedAction): String {
         }
         else -> {
             item.target?.let { parts.add("目标: $it") }
-            item.state?.let { parts.add("状态: $it") }
+            effectiveState?.let { parts.add("状态: $it") }
         }
     }
 

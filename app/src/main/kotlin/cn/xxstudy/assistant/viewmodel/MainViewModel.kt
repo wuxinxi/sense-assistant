@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 
 import cn.xxstudy.assistant.data.ModelType
 import cn.xxstudy.assistant.engine.ThinkingStreamParser
+import cn.xxstudy.assistant.ui.components.ActionExecutor
 import cn.xxstudy.assistant.ui.components.IntentParser
 
 data class ChatMessage(
@@ -318,7 +319,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val parsedActions = IntentParser.parse(actualText)
                 if (parsedActions != null) {
-                    // 意图识别结果：使用优美自然的中文语音播报替代生硬冷冰冰的原始 JSON
+                    // 1. 言出法随：后台静默/自动执行识别出的硬件或系统指令，无需用户手动点击
+                    try {
+                        parsedActions.forEach { action ->
+                            ActionExecutor.execute(getApplication(), action)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    // 2. 意图识别结果：使用优美自然的中文语音播报替代生硬冷冰冰的原始 JSON
                     if (AppSettings.ttsAutoPlay.value) {
                         val speechText = IntentParser.formatForSpeech(parsedActions)
                         speakMessage(thinkingId, speechText)
