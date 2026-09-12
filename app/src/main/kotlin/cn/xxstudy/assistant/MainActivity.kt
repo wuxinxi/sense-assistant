@@ -1,12 +1,16 @@
 package cn.xxstudy.assistant
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -45,6 +49,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         AppSettings.init(application)
+        checkAppPermissions()
         handleIntent(intent)
         setContent {
             val themeMode by AppSettings.themeMode.collectAsState()
@@ -114,6 +119,19 @@ class MainActivity : ComponentActivity() {
         val ttsText = intent?.getStringExtra("tts")
         if (!ttsText.isNullOrBlank()) {
             viewModel.speechManager.speak(ttsText)
+        }
+    }
+
+    private fun checkAppPermissions() {
+        val permissions = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.READ_CONTACTS)
+        }
+        if (permissions.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, permissions.toTypedArray(), 1001)
         }
     }
 

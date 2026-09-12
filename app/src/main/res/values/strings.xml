@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">iash</string>
+    <string name="accessibility_service_label">TangRen AI 快捷服务</string>
+    <string name="accessibility_service_description">用于响应语音助手“帮我截图”等系统级快捷操作</string>
 </resources>

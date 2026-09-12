@@ -9,6 +9,8 @@ import android.provider.AlarmClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.Toast
+import cn.xxstudy.assistant.service.AssistantAccessibilityService
+import cn.xxstudy.assistant.utils.ContactHelper
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -257,22 +259,47 @@ object ActionExecutor {
         return try {
             when (item.action.lowercase()) {
                 "phone_call" -> {
-                    val target = item.number ?: item.contact ?: ""
-                    val intent = Intent(Intent.ACTION_DIAL).apply {
-                        if (target.isNotBlank() && target.matches(Regex("^[0-9+*#]+$"))) {
-                            data = android.net.Uri.parse("tel:$target")
+                    val rawTarget = (item.number ?: item.contact ?: "").trim()
+                    val isDirectNumber = rawTarget.isNotBlank() && rawTarget.matches(Regex("^[0-9+*#]+$"))
+
+                    val (dialNumber, feedback) = if (isDirectNumber) {
+                        rawTarget to "已填入拨号盘呼叫 $rawTarget"
+                    } else if (rawTarget.isNotBlank()) {
+                        val match = ContactHelper.findContact(context, rawTarget)
+                        if (match != null) {
+                            match.phoneNumber to "已找到联系人“${match.displayName}”并填入号码：${match.phoneNumber}"
                         } else {
-                            data = android.net.Uri.parse("tel:")
+                            "" to "通讯录未找到“$rawTarget”，已打开拨号盘"
+                        }
+                    } else {
+                        "" to "已打开拨号盘"
+                    }
+
+                    val intent = Intent(Intent.ACTION_DIAL).apply {
+                        data = if (dialNumber.isNotBlank()) {
+                            android.net.Uri.parse("tel:$dialNumber")
+                        } else {
+                            android.net.Uri.parse("tel:")
                         }
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
                     context.startActivity(intent)
-                    val who = item.contact ?: item.number ?: "联系人"
-                    "已拉起拨号盘呼叫 $who"
+                    feedback
                 }
                 "system_feature" -> {
                     when (item.feature?.lowercase()) {
-                        "screenshot" -> "已触发截屏操作"
+                        "screenshot" -> {
+                            if (AssistantAccessibilityService.isRunning) {
+                                val success = AssistantAccessibilityService.takeScreenshot()
+                                if (success) "已截取当前屏幕并保存至相册" else "截屏失败，请稍后重试"
+                            } else {
+                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
+                                "截屏功能需开启“TangRen AI 快捷服务”无障碍权限，正在前往设置..."
+                            }
+                        }
                         "screen_record" -> if (effectiveState in listOf("off", "stop")) "已停止屏幕录制" else "已就绪屏幕录制"
                         else -> "系统快捷功能已就绪"
                     }
