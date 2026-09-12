@@ -6,6 +6,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 允许麦克风录音用于端侧 SenseVoice 离线 ASR 语音转文字 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 允许控制手电筒闪光灯与硬件反馈 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
     <application
         android:allowBackup="true"

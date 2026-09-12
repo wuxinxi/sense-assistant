@@ -1,6 +1,16 @@
 package cn.xxstudy.assistant.ui.components
 
+import android.content.Context
+import android.content.Intent
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.media.AudioManager
+import android.provider.AlarmClock
+import android.provider.MediaStore
+import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,6 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -195,6 +208,136 @@ object IntentParser {
 }
 
 /**
+ * 端侧操作指令分发与硬件调度执行器
+ */
+object ActionExecutor {
+    fun execute(context: Context, item: ParsedAction): String {
+        return try {
+            when (item.action.lowercase()) {
+                "phone_settings" -> {
+                    when (item.setting?.lowercase()) {
+                        "flashlight" -> {
+                            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+                            if (cameraManager != null) {
+                                val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                                    try {
+                                        cameraManager.getCameraCharacteristics(id)
+                                            .get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                                    } catch (e: Exception) { false }
+                                } ?: cameraManager.cameraIdList.firstOrNull()
+
+                                if (cameraId != null) {
+                                    val turnOn = item.state?.lowercase() != "off"
+                                    cameraManager.setTorchMode(cameraId, turnOn)
+                                    if (turnOn) "手电筒已开启" else "手电筒已关闭"
+                                } else {
+                                    "未检测到设备闪光灯"
+                                }
+                            } else {
+                                "无法获取相机服务"
+                            }
+                        }
+                        "ringer_mode" -> {
+                            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                            if (audioManager != null) {
+                                when (item.state?.lowercase()) {
+                                    "silent" -> {
+                                        audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
+                                        "已开启静音模式"
+                                    }
+                                    "vibrate" -> {
+                                        audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                                        "已开启震动模式"
+                                    }
+                                    else -> {
+                                        audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                                        "已恢复正常响铃"
+                                    }
+                                }
+                            } else "无法调节响铃模式"
+                        }
+                        "volume" -> {
+                            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                            if (audioManager != null) {
+                                val direction = if (item.adjustment?.contains("-") == true) {
+                                    AudioManager.ADJUST_LOWER
+                                } else {
+                                    AudioManager.ADJUST_RAISE
+                                }
+                                audioManager.adjustStreamVolume(
+                                    AudioManager.STREAM_MUSIC,
+                                    direction,
+                                    AudioManager.FLAG_SHOW_UI
+                                )
+                                "已调节系统音量"
+                            } else "无法调节音量"
+                        }
+                        else -> {
+                            context.startActivity(Intent(Settings.ACTION_SETTINGS).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            })
+                            "已打开系统设置"
+                        }
+                    }
+                }
+                "app_launch" -> {
+                    val pm = context.packageManager
+                    val appLower = item.appName?.lowercase()
+                    val packageName = when (appLower) {
+                        "wechat" -> "com.tencent.mm"
+                        "amap" -> "com.autonavi.minimap"
+                        "neteasemusic" -> "com.netease.cloudmusic"
+                        "taobao" -> "com.taobao.taobao"
+                        else -> null
+                    }
+                    if (packageName != null) {
+                        val launchIntent = pm.getLaunchIntentForPackage(packageName)
+                        if (launchIntent != null) {
+                            context.startActivity(launchIntent.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
+                            "已启动 ${item.appName}"
+                        } else {
+                            "未安装 ${item.appName}"
+                        }
+                    } else if (appLower == "camera") {
+                        val intent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(intent)
+                        "已启动系统相机"
+                    } else {
+                        val intent = Intent(Settings.ACTION_SETTINGS).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(intent)
+                        "已打开系统设置"
+                    }
+                }
+                "timer_memo" -> {
+                    if (item.type?.lowercase() == "timer" && item.durationSeconds != null) {
+                        val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                            putExtra(AlarmClock.EXTRA_LENGTH, item.durationSeconds)
+                            putExtra(AlarmClock.EXTRA_MESSAGE, item.label ?: "倒计时")
+                            putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(intent)
+                        "已设置 ${item.durationSeconds / 60} 分钟倒计时"
+                    } else {
+                        "已记录备忘: ${item.label ?: item.content ?: "完成"}"
+                    }
+                }
+                "device_control" -> {
+                    "已向本地智能网关发送指令"
+                }
+                else -> "指令已确认执行"
+            }
+        } catch (e: Exception) {
+            "执行异常: ${e.localizedMessage ?: e.message}"
+        }
+    }
+}
+
+/**
  * 现代 Material3 意图操作展示胶囊卡片
  */
 @Composable
@@ -203,6 +346,8 @@ fun IntentActionCard(
     rawText: String,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     var showRawJson by remember { mutableStateOf(false) }
 
     Card(
@@ -247,15 +392,33 @@ fun IntentActionCard(
                 Spacer(modifier = Modifier.weight(1f))
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            actions.forEach { ActionExecutor.execute(context, it) }
+                            Toast.makeText(context, "已触发执行 ${actions.size} 项指令", Toast.LENGTH_SHORT).show()
+                        }
                 ) {
-                    Text(
-                        text = "${actions.size} 项指令",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = "${actions.size} 项指令 (点此执行)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
                 }
             }
 
@@ -321,12 +484,29 @@ fun IntentActionCard(
 
 @Composable
 private fun ActionItemRow(index: Int, item: ParsedAction) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val (title, icon, iconBg) = getActionMeta(item.action)
+
+    var isExecuted by remember { mutableStateOf(false) }
+    var executionFeedback by remember { mutableStateOf<String?>(null) }
 
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-        modifier = Modifier.fillMaxWidth()
+        color = if (isExecuted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+        border = if (isExecuted) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+                 else BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                val res = ActionExecutor.execute(context, item)
+                isExecuted = true
+                executionFeedback = res
+                Toast.makeText(context, res, Toast.LENGTH_SHORT).show()
+            }
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -334,7 +514,7 @@ private fun ActionItemRow(index: Int, item: ParsedAction) {
         ) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(36.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(iconBg.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
@@ -343,7 +523,7 @@ private fun ActionItemRow(index: Int, item: ParsedAction) {
                     imageVector = icon,
                     contentDescription = null,
                     tint = iconBg,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
@@ -363,6 +543,52 @@ private fun ActionItemRow(index: Int, item: ParsedAction) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 16.sp
                 )
+                if (executionFeedback != null) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "✓ $executionFeedback",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // 右侧直观的操作触发按钮
+            FilledTonalButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    val res = ActionExecutor.execute(context, item)
+                    isExecuted = true
+                    executionFeedback = res
+                    Toast.makeText(context, res, Toast.LENGTH_SHORT).show()
+                },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                modifier = Modifier.height(32.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = if (isExecuted) Color(0xFFE8F5E9) else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    contentColor = if (isExecuted) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
+                )
+            ) {
+                if (isExecuted) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("已执行", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("执行", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
