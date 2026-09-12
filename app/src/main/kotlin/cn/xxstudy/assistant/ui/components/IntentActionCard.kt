@@ -10,7 +10,13 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.Toast
 import cn.xxstudy.assistant.service.AssistantAccessibilityService
+import cn.xxstudy.assistant.utils.AppHelper
 import cn.xxstudy.assistant.utils.ContactHelper
+import cn.xxstudy.assistant.utils.DeviceHelper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -57,6 +63,7 @@ data class ParsedAction(
     val adjustment: String? = null,
     val value: String? = null,
     val durationSeconds: Int? = null,
+    val delaySeconds: Int? = null,
     val rawJson: String = ""
 )
 
@@ -110,6 +117,7 @@ object IntentParser {
                         adjustment = obj.optString("adjustment").takeIf { it.isNotBlank() },
                         value = if (obj.has("value")) obj.opt("value")?.toString() else null,
                         durationSeconds = if (obj.has("duration_seconds")) obj.optInt("duration_seconds") else null,
+                        delaySeconds = if (obj.has("delay_seconds")) obj.optInt("delay_seconds") else null,
                         rawJson = obj.toString(2)
                     )
                 )
@@ -132,35 +140,17 @@ object IntentParser {
                     "拨打 $tgt 的电话"
                 }
                 "system_feature" -> {
+                    val delayInfo = if (action.delaySeconds != null && action.delaySeconds > 0) "在 ${action.delaySeconds} 秒后" else ""
                     when (action.feature?.lowercase()) {
-                        "screenshot" -> "截取屏幕"
-                        "screen_record" -> if (action.state == "stop") "停止录屏" else "开始屏幕录制"
+                        "screenshot" -> "${delayInfo}截取屏幕"
+                        "screen_record" -> if (action.state == "stop") "停止录屏" else "${delayInfo}开始屏幕录制"
                         else -> "系统快捷操作"
                     }
                 }
                 "device_control" -> {
-                    val dev = action.device ?: action.target ?: "设备"
-                    val devCn = when (dev) {
-                        "living_room_light" -> "客厅大灯"
-                        "bedroom_ac" -> "卧室空调"
-                        "ac" -> "空调"
-                        "all_lights" -> "全屋灯光"
-                        "living_room_curtain" -> "客厅窗帘"
-                        "vacuum_robot" -> "扫地机器人"
-                        "air_purifier" -> "空气净化器"
-                        "study_fan" -> "书房风扇"
-                        "water_heater" -> "热水器"
-                        else -> dev
-                    }
-                    when (action.state) {
-                        "on" -> "打开$devCn"
-                        "off" -> "关闭$devCn"
-                        "open" -> "拉开$devCn"
-                        "close" -> "合上$devCn"
-                        "start" -> "启动$devCn"
-                        "dock" -> "$devCn 回充"
-                        else -> "$devCn ${action.state ?: "操作"}"
-                    }
+                    val dev = action.device ?: action.target ?: "智能设备"
+                    val st = DeviceHelper.formatState(action.state)
+                    "${st} $dev"
                 }
                 "phone_settings" -> {
                     val set = action.setting ?: "系统设置"
@@ -199,33 +189,7 @@ object IntentParser {
                 }
                 "app_launch" -> {
                     val app = action.appName ?: "应用"
-                    val appCn = when (app.lowercase()) {
-                        "wechat" -> "微信"
-                        "alipay" -> "支付宝"
-                        "douyin" -> "抖音"
-                        "kuaishou" -> "快手"
-                        "xiaohongshu" -> "小红书"
-                        "amap" -> "高德地图"
-                        "baidumap" -> "百度地图"
-                        "meituan" -> "美团"
-                        "taobao" -> "淘宝"
-                        "jd" -> "京东"
-                        "pinduoduo" -> "拼多多"
-                        "bilibili" -> "哔哩哔哩"
-                        "neteasemusic" -> "网易云音乐"
-                        "qqmusic" -> "QQ音乐"
-                        "camera" -> "系统相机"
-                        "gallery" -> "相册"
-                        "settings" -> "设置"
-                        "browser" -> "浏览器"
-                        "calculator" -> "计算器"
-                        "notes" -> "备忘录"
-                        "weibo" -> "微博"
-                        "dingtalk" -> "钉钉"
-                        "zhihu" -> "知乎"
-                        else -> app
-                    }
-                    "打开$appCn"
+                    "打开 $app"
                 }
                 "timer_memo" -> {
                     val type = action.type ?: "提醒"
@@ -290,8 +254,17 @@ object ActionExecutor {
                     when (item.feature?.lowercase()) {
                         "screenshot" -> {
                             if (AssistantAccessibilityService.isRunning) {
-                                val success = AssistantAccessibilityService.takeScreenshot()
-                                if (success) "已截取当前屏幕并保存至相册" else "截屏失败，请稍后重试"
+                                val delaySec = item.delaySeconds ?: 0
+                                if (delaySec > 0) {
+                                    CoroutineScope(Dispatchers.Main).launch {
+                                        delay(delaySec * 1000L)
+                                        AssistantAccessibilityService.takeScreenshot()
+                                    }
+                                    "已就绪，将在 ${delaySec} 秒后自动截屏，请切换到目标画面"
+                                } else {
+                                    val success = AssistantAccessibilityService.takeScreenshot()
+                                    if (success) "已截取当前屏幕并保存至相册" else "截屏失败，请稍后重试"
+                                }
                             } else {
                                 val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -422,92 +395,45 @@ object ActionExecutor {
                     }
                 }
                 "device_control" -> {
-                    val dev = item.device ?: item.target ?: "设备"
-                    val devCn = when (dev) {
-                        "living_room_light" -> "客厅大灯"
-                        "bedroom_ac" -> "卧室空调"
-                        "ac" -> "空调"
-                        "all_lights" -> "全屋灯光"
-                        "living_room_curtain" -> "客厅窗帘"
-                        "vacuum_robot" -> "扫地机器人"
-                        "air_purifier" -> "空气净化器"
-                        "study_fan" -> "书房风扇"
-                        "water_heater" -> "热水器"
-                        else -> dev
-                    }
-                    val isTurnOn = effectiveState !in listOf("off", "close", "dock")
-                    if (isTurnOn) "已打开 $devCn" else "已关闭 $devCn"
+                    val dev = item.device ?: item.target ?: "智能设备"
+                    DeviceHelper.dispatchDeviceControl(context, dev, effectiveState)
                 }
                 "app_launch" -> {
-                    val pm = context.packageManager
-                    val appLower = item.appName?.lowercase() ?: ""
-                    val packageName = when (appLower) {
-                        "wechat" -> "com.tencent.mm"
-                        "alipay" -> "com.eg.android.AlipayGphone"
-                        "douyin" -> "com.ss.android.ugc.aweme"
-                        "kuaishou" -> "com.smile.gifmaker"
-                        "xiaohongshu" -> "com.xingin.xhs"
-                        "amap" -> "com.autonavi.minimap"
-                        "baidumap" -> "com.baidu.BaiduMap"
-                        "meituan" -> "com.sankuai.meituan"
-                        "taobao" -> "com.taobao.taobao"
-                        "jd" -> "com.jingdong.app.mall"
-                        "pinduoduo" -> "com.xunmeng.pinduoduo"
-                        "bilibili" -> "tv.danmaku.bili"
-                        "neteasemusic" -> "com.netease.cloudmusic"
-                        "qqmusic" -> "com.tencent.qqmusic"
-                        "weibo" -> "com.sina.weibo"
-                        "dingtalk" -> "com.alibaba.android.rimet"
-                        "zhihu" -> "com.zhihu.android"
-                        else -> null
-                    }
-                    if (packageName != null) {
-                        val launchIntent = pm.getLaunchIntentForPackage(packageName)
-                        if (launchIntent != null) {
-                            context.startActivity(launchIntent.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
-                            "已启动 ${item.appName}"
-                        } else {
-                            "未安装 ${item.appName} 应用"
-                        }
-                    } else if (appLower == "camera") {
-                        val intent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        }
-                        context.startActivity(intent)
-                        "已启动系统相机"
-                    } else if (appLower == "gallery") {
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            type = "image/*"
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        }
-                        context.startActivity(intent)
-                        "已打开系统相册"
-                    } else if (appLower == "settings") {
-                        val intent = Intent(Settings.ACTION_SETTINGS).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        }
-                        context.startActivity(intent)
-                        "已打开系统设置"
+                    val targetName = item.appName ?: ""
+                    val matchedApp = AppHelper.findApp(context, targetName)
+                    if (matchedApp != null) {
+                        val success = AppHelper.launchApp(context, matchedApp)
+                        if (success) "已启动 ${matchedApp.label}" else "启动 ${matchedApp.label} 失败"
                     } else {
-                        val intent = Intent(Settings.ACTION_SETTINGS).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        }
-                        context.startActivity(intent)
-                        "已拉起系统应用"
+                        "未在手机上找到“$targetName”，请确认是否已安装"
                     }
                 }
                 "timer_memo" -> {
-                    if (item.type?.lowercase() == "timer" && item.durationSeconds != null) {
+                    val duration = item.durationSeconds
+                    if (item.type?.lowercase() == "timer" && duration != null && duration > 0) {
                         val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
-                            putExtra(AlarmClock.EXTRA_LENGTH, item.durationSeconds)
+                            putExtra(AlarmClock.EXTRA_LENGTH, duration)
                             putExtra(AlarmClock.EXTRA_MESSAGE, item.label ?: "倒计时")
                             putExtra(AlarmClock.EXTRA_SKIP_UI, false)
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
                         }
                         context.startActivity(intent)
-                        "已设置 ${item.durationSeconds / 60} 分钟倒计时"
+                        "已设置 ${duration / 60} 分钟倒计时"
+                    } else if (item.type?.lowercase() in listOf("alarm", "reminder") && !item.time.isNullOrBlank()) {
+                        val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                            putExtra(AlarmClock.EXTRA_MESSAGE, item.label ?: "提醒")
+                            putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(intent)
+                        "已调起闹钟提醒: ${item.time}"
                     } else {
-                        "已记录备忘: ${item.label ?: item.content ?: "完成"}"
+                        val content = item.label ?: item.content ?: ""
+                        if (content.isNotBlank() && !content.contains("帮我完成") && !content.contains("任务")) {
+                            "已记录备忘: $content"
+                        } else {
+                            "指令已忽略"
+                        }
                     }
                 }
                 else -> "指令已确认执行"
@@ -835,34 +761,14 @@ private fun formatActionSummary(item: ParsedAction, currentState: String? = null
                 else -> item.feature ?: "系统功能"
             }
             parts.add("操作: $featCn")
+            item.delaySeconds?.let { if (it > 0) parts.add("延时: ${it}秒") }
             effectiveState?.let { parts.add("状态: $it") }
         }
         "device_control" -> {
-            val dev = item.device ?: item.target ?: "未知设备"
-            val devCn = when (dev) {
-                "living_room_light" -> "客厅大灯"
-                "bedroom_ac" -> "卧室空调"
-                "ac" -> "空调"
-                "all_lights" -> "全屋灯光"
-                "living_room_curtain" -> "客厅窗帘"
-                "vacuum_robot" -> "扫地机器人"
-                "air_purifier" -> "空气净化器"
-                "study_fan" -> "书房风扇"
-                "water_heater" -> "热水器"
-                else -> dev
-            }
-            parts.add("设备: $devCn")
+            val dev = item.device ?: item.target ?: "智能设备"
+            parts.add("设备: $dev")
             effectiveState?.let {
-                val stCn = when (it) {
-                    "on" -> "开启"
-                    "off" -> "关闭"
-                    "open" -> "拉开"
-                    "close" -> "合上"
-                    "start" -> "启动清扫"
-                    "dock" -> "回充"
-                    else -> it
-                }
-                parts.add("状态: $stCn")
+                parts.add("动作: ${DeviceHelper.formatState(it)}")
             }
         }
         "phone_settings" -> {
@@ -898,33 +804,7 @@ private fun formatActionSummary(item: ParsedAction, currentState: String? = null
         }
         "app_launch" -> {
             val app = item.appName ?: "应用"
-            val appCn = when (app.lowercase()) {
-                "wechat" -> "微信"
-                "alipay" -> "支付宝"
-                "douyin" -> "抖音"
-                "kuaishou" -> "快手"
-                "xiaohongshu" -> "小红书"
-                "amap" -> "高德地图"
-                "baidumap" -> "百度地图"
-                "meituan" -> "美团"
-                "taobao" -> "淘宝"
-                "jd" -> "京东"
-                "pinduoduo" -> "拼多多"
-                "bilibili" -> "哔哩哔哩"
-                "neteasemusic" -> "网易云音乐"
-                "qqmusic" -> "QQ音乐"
-                "camera" -> "系统相机"
-                "gallery" -> "系统相册"
-                "settings" -> "系统设置"
-                "browser" -> "浏览器"
-                "calculator" -> "计算器"
-                "notes" -> "备忘录"
-                "weibo" -> "微博"
-                "dingtalk" -> "钉钉"
-                "zhihu" -> "知乎"
-                else -> app
-            }
-            parts.add("启动: $appCn")
+            parts.add("启动: $app")
         }
         "timer_memo" -> {
             val type = item.type ?: "提醒"
