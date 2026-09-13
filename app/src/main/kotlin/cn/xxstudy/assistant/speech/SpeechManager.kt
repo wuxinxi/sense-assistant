@@ -138,7 +138,11 @@ class SpeechManager(private val context: Context) {
                 if (!vitsEngine.isReady.value) {
                     _isSpeaking.value = false
                     _currentUtteranceId.value = null
-                    mainHandler.post { onSpeechDoneCallback?.invoke() }
+                    mainHandler.post {
+                        val cb = onSpeechDoneCallback
+                        onSpeechDoneCallback = null
+                        cb?.invoke()
+                    }
                 }
             }
 
@@ -147,6 +151,11 @@ class SpeechManager(private val context: Context) {
                 if (!vitsEngine.isReady.value) {
                     _isSpeaking.value = false
                     _currentUtteranceId.value = null
+                    mainHandler.post {
+                        val cb = onSpeechDoneCallback
+                        onSpeechDoneCallback = null
+                        cb?.invoke()
+                    }
                 }
             }
 
@@ -155,6 +164,11 @@ class SpeechManager(private val context: Context) {
                     _isSpeaking.value = false
                     _currentUtteranceId.value = null
                     Log.e(TAG, "System TTS utterance error: $errorCode for $utteranceId")
+                    mainHandler.post {
+                        val cb = onSpeechDoneCallback
+                        onSpeechDoneCallback = null
+                        cb?.invoke()
+                    }
                 }
             }
         })
@@ -231,7 +245,7 @@ class SpeechManager(private val context: Context) {
     }
 
     /**
-     * 手动触发单条消息朗读（支持历史消息点击）
+     * 手动触发单条消息朗读（支持历史消息点击与意图执行播报）
      */
     fun speak(
         text: String,
@@ -242,11 +256,15 @@ class SpeechManager(private val context: Context) {
     ) {
         if (!_isTtsReady.value) {
             Log.w(TAG, "TTS not ready yet")
+            onDone?.invoke()
             return
         }
 
         val cleanText = text.replace(Regex("<\\|.*?\\|>"), "").trim()
-        if (cleanText.isEmpty()) return
+        if (cleanText.isEmpty()) {
+            onDone?.invoke()
+            return
+        }
 
         stopSpeaking()
         onSpeechDoneCallback = onDone
@@ -262,6 +280,9 @@ class SpeechManager(private val context: Context) {
             }
             chunker.onToken(cleanText)
             chunker.flush()
+            managerScope.launch(Dispatchers.Default) {
+                finishStreamingSpeechInternal()
+            }
         } else {
             // 降级使用系统 TTS
             val targetRate = if (speechRate != 1.0f) speechRate else AppSettings.ttsSpeechRate.value
@@ -287,6 +308,53 @@ class SpeechManager(private val context: Context) {
     }
 
     /**
+     * 通知流式分句全部发送完毕，等待播放完成并触发回调（连续免唤醒对话关键接入点）
+     */
+    fun finishStreamingSpeech(onDone: (() -> Unit)? = null) {
+        if (!_isTtsReady.value) {
+            onDone?.invoke()
+            return
+        }
+
+        if (onDone != null) {
+            onSpeechDoneCallback = onDone
+        }
+
+        if (vitsEngine.isReady.value) {
+            managerScope.launch(Dispatchers.Default) {
+                finishStreamingSpeechInternal()
+            }
+        } else {
+            val finishId = "stream_finish_${System.currentTimeMillis()}"
+            _currentUtteranceId.value = finishId
+            val params = android.os.Bundle()
+            systemTts?.speak("", TextToSpeech.QUEUE_ADD, params, finishId)
+        }
+    }
+
+    private suspend fun finishStreamingSpeechInternal() {
+        val currentJob = streamingWorkerJob
+        val channel = streamingSentenceChannel
+        channel?.close()
+        streamingSentenceChannel = null
+        try {
+            currentJob?.join()
+            ttsPlayer.awaitPlaybackDone()
+        } catch (e: CancellationException) {
+            return
+        } finally {
+            streamingWorkerJob = null
+        }
+        _isSpeaking.value = false
+        _currentUtteranceId.value = null
+        mainHandler.post {
+            val cb = onSpeechDoneCallback
+            onSpeechDoneCallback = null
+            cb?.invoke()
+        }
+    }
+
+    /**
      * 创建一个流式标点切句器，用于大模型流式 Token 回调
      */
     fun createSentenceChunker(): SentenceChunker {
@@ -299,6 +367,8 @@ class SpeechManager(private val context: Context) {
      * 立即停止发音并打断所有待播放数据（毫秒级全链路刹车）
      */
     fun stopSpeaking() {
+        onSpeechDoneCallback = null
+
         // 1. 关闭并清空待合成 Channel
         streamingSentenceChannel?.close()
         while (streamingSentenceChannel?.tryReceive()?.isSuccess == true) {

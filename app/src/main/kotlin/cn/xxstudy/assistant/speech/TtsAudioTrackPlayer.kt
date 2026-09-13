@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -35,6 +36,7 @@ class TtsAudioTrackPlayer(
     private var audioTrack: AudioTrack? = null
     private var playbackJob: Job? = null
     private var currentPitch: Float = 1.0f
+    private var totalFramesWritten: Long = 0L
 
     init {
         initAudioTrack(sampleRate)
@@ -145,17 +147,35 @@ class TtsAudioTrackPlayer(
                     )
                     if (count > 0) {
                         written += count
+                        totalFramesWritten += count
                     } else {
                         Log.w(TAG, "AudioTrack write returned $count")
                         break
                     }
                 }
 
-                if (audioQueue.isEmpty) {
-                    _isPlaying.value = false
+                if (audioQueue.isEmpty && !isInterrupted.get()) {
+                    // 等待 AudioTrack 底层硬件缓冲区彻底播放完毕（避免声音还在扬声器响，就提前回调发音结束拉起麦克风录入回声）
+                    val head = (track.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+                    val remainingFrames = totalFramesWritten - head
+                    if (remainingFrames > 0) {
+                        val waitMs = (remainingFrames * 1000L / sampleRate).coerceIn(0L, 2500L)
+                        delay(waitMs + 30L)
+                    }
+                    if (audioQueue.isEmpty && !isInterrupted.get()) {
+                        _isPlaying.value = false
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * 挂起等待直到所有音频彻底由硬件播放完毕
+     */
+    suspend fun awaitPlaybackDone() {
+        if (audioQueue.isEmpty && !_isPlaying.value) return
+        _isPlaying.first { !it }
     }
 
     /**
@@ -184,6 +204,7 @@ class TtsAudioTrackPlayer(
                     track.flush()
                     track.play()
                 }
+                totalFramesWritten = (track.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error flushing AudioTrack: ${e.message}", e)

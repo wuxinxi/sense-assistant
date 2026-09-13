@@ -100,7 +100,7 @@ class VitsTtsEngine(private val context: Context) : AutoCloseable {
             val isMelo = modelId.contains("melo", ignoreCase = true)
             _isBilingual.value = isMelo
 
-            var modelConfig = OfflineTtsModelConfig(numThreads = 2, debug = false, provider = "cpu")
+            var modelConfig = OfflineTtsModelConfig(numThreads = 4, debug = false, provider = "cpu")
 
             if (modelId.contains("matcha", ignoreCase = true)) {
                 val acousticFile = File(foundDir, "model-steps-3.onnx").takeIf { it.exists() }

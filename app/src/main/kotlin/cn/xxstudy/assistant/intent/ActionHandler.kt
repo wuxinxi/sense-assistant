@@ -38,4 +38,10 @@ interface ActionHandler {
      * @param currentState 当前界面的状态（如 "on", "off"）
      */
     fun getUiDescriptor(request: ActionRequest, currentState: String? = null): ActionUiDescriptor
+
+    /**
+     * 支持上下文（用于动态查通讯录、硬件状态）的 UI 描述符重载
+     */
+    fun getUiDescriptor(request: ActionRequest, currentState: String?, context: Context?): ActionUiDescriptor =
+        getUiDescriptor(request, currentState)
 }

@@ -77,13 +77,17 @@ fun ChatBubble(
                 bottomEnd = if (isUser) 4.dp else 20.dp
             ),
             color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.widthIn(
-                max = if (isUser) 280.dp 
-                      else if (parsedActions != null || isPotentialJson || !msg.thinkingText.isNullOrBlank()) 340.dp 
-                      else 300.dp
-            )
+            modifier = if (parsedActions != null || isPotentialJson) {
+                Modifier.weight(1f, fill = false).widthIn(min = 280.dp, max = 420.dp)
+            } else {
+                Modifier.widthIn(
+                    max = if (isUser) 280.dp 
+                          else if (!msg.thinkingText.isNullOrBlank()) 340.dp 
+                          else 300.dp
+                )
+            }
         ) {
-            Box(modifier = Modifier.padding(12.dp)) {
+            Box(modifier = Modifier.padding(if (parsedActions != null) 6.dp else 12.dp)) {
                 if (msg.isThinking && msg.thinkingText.isNullOrBlank()) {
                     // 初始冷启动等待态（尚未返回任何 Token 或开始标记）
                     Row(verticalAlignment = Alignment.CenterVertically) {

@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -85,23 +86,56 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    // 智能判断用户当前是否停留在列表底部附近
-    val isAtBottom by remember {
-        derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val totalItems = layoutInfo.totalItemsCount
-            if (totalItems == 0) true
-            else {
-                val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                lastVisibleIndex >= totalItems - 1
+    // 用户手势交互与自动吸底状态追踪
+    var autoScrollToBottom by remember { mutableStateOf(true) }
+    val isDragged by listState.interactionSource.collectIsDraggedAsState()
+
+    // 监听用户手势拖动
+    LaunchedEffect(isDragged) {
+        if (isDragged) {
+            // 用户主动拖拽时，若向上滑动（下方尚有内容），暂停自动吸底
+            if (listState.canScrollForward) {
+                autoScrollToBottom = false
+            }
+        } else {
+            // 手指松开时，若已在最底部，恢复自动吸底
+            if (!listState.canScrollForward) {
+                autoScrollToBottom = true
             }
         }
     }
 
-    // 监听消息列表新增或更新：仅在用户本就在底部时自动滚到底部，绝不干扰用户向上翻看历史
-    LaunchedEffect(chatMessages.size, chatMessages.lastOrNull()?.text, chatMessages.lastOrNull()?.thinkingText) {
-        if (chatMessages.isNotEmpty() && isAtBottom) {
+    // 监听滑动彻底静止（包含惯性滚动结束）
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress) {
+            if (!listState.canScrollForward) {
+                autoScrollToBottom = true
+            }
+        }
+    }
+
+    // 1. 新消息入列时（用户发送或 AI 消息创建）：恢复吸底并平滑滚动至最底
+    LaunchedEffect(chatMessages.size) {
+        if (chatMessages.isNotEmpty()) {
+            autoScrollToBottom = true
             listState.animateScrollToItem(chatMessages.size - 1)
+        }
+    }
+
+    // 2. 流式文本吐字或思考过程展开/折叠时：稳定持续吸底，防止高频 Token 触发动画中断卡死
+    LaunchedEffect(
+        chatMessages.lastOrNull()?.text,
+        chatMessages.lastOrNull()?.thinkingText,
+        chatMessages.lastOrNull()?.isThinkingCollapsed
+    ) {
+        if (chatMessages.isNotEmpty() && autoScrollToBottom) {
+            val targetIndex = chatMessages.size - 1
+            val lastItem = listState.layoutInfo.visibleItemsInfo.find { it.index == targetIndex }
+            val offset = if (lastItem != null) {
+                val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+                (lastItem.size - viewportHeight + 100).coerceAtLeast(0)
+            } else 0
+            listState.scrollToItem(targetIndex, offset)
         }
     }
 
@@ -206,6 +240,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         return@DoubaoInputBar
                     }
                     if (inputText.isNotBlank()) {
+                        autoScrollToBottom = true
                         viewModel.sendMessage(inputText)
                         inputText = ""
                     }

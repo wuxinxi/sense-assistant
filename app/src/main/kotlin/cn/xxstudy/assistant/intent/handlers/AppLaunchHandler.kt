@@ -43,11 +43,12 @@ class AppLaunchHandler : ActionHandler {
     override fun getUiDescriptor(request: ActionRequest, currentState: String?): ActionUiDescriptor {
         val appName = request.optString("app_name", "appName", "target", "name") ?: "应用"
         return ActionUiDescriptor(
-            title = "应用调度启闭",
-            summary = "启动: $appName",
+            title = "打开应用",
+            summary = appName,
             icon = Icons.Default.Apps,
             iconTint = Color(0xFFFF9800),
-            isToggleable = false
+            isToggleable = false,
+            actionButtonText = "打开"
         )
     }
 }

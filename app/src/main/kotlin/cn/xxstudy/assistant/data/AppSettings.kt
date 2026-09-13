@@ -129,7 +129,7 @@ object AppSettings {
     private val _ttsAutoPlay = MutableStateFlow(true)
     val ttsAutoPlay: StateFlow<Boolean> = _ttsAutoPlay.asStateFlow()
 
-    private val _ttsSpeechRate = MutableStateFlow(1.0f)
+    private val _ttsSpeechRate = MutableStateFlow(1.2f)
     val ttsSpeechRate: StateFlow<Float> = _ttsSpeechRate.asStateFlow()
 
     private val _ttsPitch = MutableStateFlow(1.0f)
@@ -168,7 +168,7 @@ object AppSettings {
         _asrAutoSend.value = prefs.getBoolean(KEY_ASR_AUTO_SEND, false)
 
         _ttsAutoPlay.value = prefs.getBoolean(KEY_TTS_AUTO_PLAY, true)
-        _ttsSpeechRate.value = prefs.getFloat(KEY_TTS_SPEECH_RATE, 1.0f)
+        _ttsSpeechRate.value = prefs.getFloat(KEY_TTS_SPEECH_RATE, 1.2f)
         _ttsPitch.value = prefs.getFloat(KEY_TTS_PITCH, 1.0f)
         _ttsSpeakerId.value = prefs.getInt(KEY_TTS_SPEAKER_ID, 0).coerceIn(0, 173)
         _ttsModelId.value = prefs.getString(KEY_TTS_MODEL_ID, "vits-melo-tts-zh_en") ?: "vits-melo-tts-zh_en"

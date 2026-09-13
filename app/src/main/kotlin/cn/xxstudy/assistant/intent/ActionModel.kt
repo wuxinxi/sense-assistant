@@ -65,7 +65,10 @@ data class ActionUiDescriptor(
     val isToggleable: Boolean = false,
     val isOn: Boolean = true,
     val toggleOnState: String = "on",
-    val toggleOffState: String = "off"
+    val toggleOffState: String = "off",
+    val actionButtonText: String? = null,
+    val actionButtonIcon: ImageVector? = null,
+    val actionOverrideState: String? = null
 )
 
 /**

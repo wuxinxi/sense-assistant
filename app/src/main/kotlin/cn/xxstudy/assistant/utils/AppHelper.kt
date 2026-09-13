@@ -67,6 +67,28 @@ object AppHelper {
         }
     }
 
+    // 常用核心国民级应用包名黄金锚点（双保险：精准优先，永不调偏至输入法或克隆插件）
+    private val GOLDEN_PACKAGE_ANCHORS = mapOf(
+        "微信" to "com.tencent.mm",
+        "wechat" to "com.tencent.mm",
+        "支付宝" to "com.eg.android.AlipayGphone",
+        "alipay" to "com.eg.android.AlipayGphone",
+        "高德地图" to "com.autonavi.minimap",
+        "百度地图" to "com.baidu.BaiduMap",
+        "美团" to "com.sankuai.meituan",
+        "淘宝" to "com.taobao.taobao",
+        "京东" to "com.jingdong.app.mall",
+        "抖音" to "com.ss.android.ugc.aweme",
+        "小红书" to "com.xingin.xhs",
+        "快手" to "com.smile.gifmaker",
+        "哔哩哔哩" to "tv.danmaku.bili",
+        "b站" to "tv.danmaku.bili",
+        "网易云音乐" to "com.netease.cloudmusic",
+        "网易云" to "com.netease.cloudmusic",
+        "qq音乐" to "com.tencent.qqmusic",
+        "微博" to "com.sina.weibo"
+    )
+
     /**
      * 根据用户说出的名称动态模糊匹配已安装应用
      */
@@ -80,32 +102,61 @@ object AppHelper {
             return null
         }
 
-        // 1. 中文桌面名称完全匹配（不区分大小写）
-        installedList.firstOrNull { it.label.equals(cleanQuery, ignoreCase = true) }?.let {
-            Log.i(TAG, "完全匹配命中应用: ${it.label} (${it.packageName})")
-            return it
-        }
-
-        // 2. 别名反查匹配（例如输入 "wechat" 对应到 "微信"）
-        val candidateAliases = COMMON_ALIASES[cleanQuery] ?: emptyList()
-        for (alias in candidateAliases) {
-            installedList.firstOrNull { it.label.contains(alias, ignoreCase = true) }?.let {
-                Log.i(TAG, "别名匹配命中应用: query=$cleanQuery -> alias=$alias -> ${it.label}")
+        // 1. 核心国民级应用黄金锚点最高优先级命中（彻底杜绝将“微信”识别为“微信输入法”）
+        val anchorPkg = GOLDEN_PACKAGE_ANCHORS[cleanQuery]
+        if (anchorPkg != null) {
+            installedList.firstOrNull { it.packageName.equals(anchorPkg, ignoreCase = true) }?.let {
+                Log.i(TAG, "黄金锚点直达命中: ${it.label} (${it.packageName})")
                 return it
             }
         }
 
-        // 3. 包含/子串匹配（例如用户说“网易云”，匹配“网易云音乐”；或者用户说“剪映专业版”，匹配“剪映”）
-        installedList.firstOrNull {
-            val l = it.label.lowercase()
-            l.contains(cleanQuery) || cleanQuery.contains(l)
-        }?.let {
-            Log.i(TAG, "子串匹配命中应用: ${it.label} (${it.packageName})")
+        // 2. 中文桌面名称严格完全匹配
+        installedList.firstOrNull { it.label.trim().equals(cleanQuery, ignoreCase = true) }?.let {
+            Log.i(TAG, "完全相等命中应用: ${it.label} (${it.packageName})")
             return it
         }
 
-        // 4. 包名子串匹配（作为极偏门英文代号兜底）
-        installedList.firstOrNull { it.packageName.lowercase().contains(cleanQuery) }?.let {
+        // 3. 过滤辅助插件/输入法干扰：如果用户没有明确提到“输入法”，则排除输入法类应用
+        val isAskingIme = cleanQuery.contains("输入法") || cleanQuery.contains("键盘") || cleanQuery.contains("ime")
+        val candidatePool = if (!isAskingIme) {
+            installedList.filter {
+                !it.label.contains("输入法") &&
+                !it.packageName.contains("input") &&
+                !it.packageName.contains("wetype") &&
+                !it.packageName.contains("ime")
+            }
+        } else {
+            installedList
+        }
+
+        // 4. 别名反查匹配（例如输入 "wechat" 对应到 "微信"）
+        val candidateAliases = COMMON_ALIASES[cleanQuery] ?: emptyList()
+        for (alias in candidateAliases) {
+            candidatePool.firstOrNull { it.label.trim().equals(alias, ignoreCase = true) }?.let {
+                Log.i(TAG, "别名完全匹配命中: query=$cleanQuery -> alias=$alias -> ${it.label}")
+                return it
+            }
+            candidatePool.filter { it.label.contains(alias, ignoreCase = true) }
+                .minByOrNull { kotlin.math.abs(it.label.length - alias.length) }?.let {
+                    Log.i(TAG, "别名模糊匹配命中: query=$cleanQuery -> alias=$alias -> ${it.label}")
+                    return it
+                }
+        }
+
+        // 5. 包含/子串匹配（按名称长度差异升序排序，最短差异最优先，避免被长名称插件抢占）
+        val subMatch = candidatePool.filter {
+            val l = it.label.lowercase()
+            l.contains(cleanQuery) || cleanQuery.contains(l)
+        }.minByOrNull { kotlin.math.abs(it.label.length - cleanQuery.length) }
+
+        if (subMatch != null) {
+            Log.i(TAG, "子串最佳距离匹配命中应用: ${subMatch.label} (${subMatch.packageName})")
+            return subMatch
+        }
+
+        // 6. 包名子串匹配（作为极偏门英文代号兜底）
+        candidatePool.firstOrNull { it.packageName.lowercase().contains(cleanQuery) }?.let {
             Log.i(TAG, "包名匹配命中应用: ${it.label} (${it.packageName})")
             return it
         }
@@ -123,7 +174,7 @@ object AppHelper {
             addCategory(Intent.CATEGORY_LAUNCHER)
             setClassName(app.packageName, app.activityName)
         }
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         return try {
             context.startActivity(intent)
             Log.i(TAG, "已成功拉起应用: ${app.label} (${app.packageName})")

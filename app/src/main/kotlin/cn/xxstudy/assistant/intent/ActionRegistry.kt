@@ -73,7 +73,7 @@ object ActionRegistry {
     /**
      * 获取对应的 UI 描述符
      */
-    fun getUiDescriptor(request: ActionRequest, currentState: String? = null): ActionUiDescriptor {
-        return getHandler(request.action).getUiDescriptor(request, currentState)
+    fun getUiDescriptor(request: ActionRequest, currentState: String? = null, context: Context? = null): ActionUiDescriptor {
+        return getHandler(request.action).getUiDescriptor(request, currentState, context)
     }
 }

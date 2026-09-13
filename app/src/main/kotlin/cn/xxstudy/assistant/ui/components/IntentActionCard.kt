@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.xxstudy.assistant.intent.ActionParser
@@ -78,7 +79,7 @@ fun IntentActionCard(
             brush = SolidColor(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
         )
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
             // 顶部标题栏
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -86,7 +87,7 @@ fun IntentActionCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
+                        .size(26.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center
@@ -95,17 +96,20 @@ fun IntentActionCard(
                         imageVector = Icons.Default.AutoAwesome,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "端侧意图识别中枢",
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.width(8.dp))
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
@@ -134,7 +138,9 @@ fun IntentActionCard(
                             text = "已自动执行",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -212,8 +218,8 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
     var executionFeedback by remember { mutableStateOf<String?>(null) }
 
     // 从注册中心动态获取当前 Action 的 UI 描述符，完全无须在此类编写具体业务判断
-    val descriptor = remember(item, activeState) {
-        ActionRegistry.getUiDescriptor(item, activeState)
+    val descriptor = remember(item, activeState, context) {
+        ActionRegistry.getUiDescriptor(item, activeState, context)
     }
 
     val isOn = descriptor.isOn
@@ -223,7 +229,7 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
         scope.launch {
             val nextState = if (descriptor.isToggleable) {
                 if (isOn) descriptor.toggleOffState else descriptor.toggleOnState
-            } else null
+            } else descriptor.actionOverrideState
 
             val result = ActionRegistry.execute(context, item, overrideState = nextState)
             if (nextState != null) {
@@ -271,14 +277,18 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
                     text = descriptor.title,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = descriptor.summary,
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 16.sp
+                    lineHeight = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (executionFeedback != null) {
                     Spacer(modifier = Modifier.height(2.dp))
@@ -286,7 +296,9 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
                         text = "✓ $executionFeedback",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (isOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                        color = if (isOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -296,8 +308,8 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
             if (descriptor.isToggleable) {
                 FilledTonalButton(
                     onClick = { doExecute() },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    modifier = Modifier.height(32.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(30.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = if (isOn) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
                                          else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
@@ -308,32 +320,42 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
                     Icon(
                         imageVector = if (isOn) Icons.Default.PowerSettingsNew else Icons.Default.PlayArrow,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(3.dp))
                     Text(
                         text = if (isOn) "关闭" else "打开",
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             } else {
                 FilledTonalButton(
                     onClick = { doExecute() },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    modifier = Modifier.height(32.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(30.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                        contentColor = MaterialTheme.colorScheme.primary
+                        containerColor = if (descriptor.actionButtonText != null) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
+                                         else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        contentColor = if (descriptor.actionButtonText != null) MaterialTheme.colorScheme.onPrimaryContainer
+                                       else MaterialTheme.colorScheme.primary
                     )
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Refresh,
+                        imageVector = descriptor.actionButtonIcon ?: Icons.Default.Refresh,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(3.dp))
-                    Text("再次执行", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = descriptor.actionButtonText ?: "再次执行",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
                 }
             }
         }

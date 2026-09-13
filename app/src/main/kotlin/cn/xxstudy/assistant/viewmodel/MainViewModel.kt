@@ -319,10 +319,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val parsedActions = IntentParser.parse(actualText)
                 if (parsedActions != null) {
+                    var executionSpeech: String? = null
                     // 1. 言出法随：后台静默/自动执行识别出的硬件或系统指令，无需用户手动点击
                     try {
-                        parsedActions.forEach { action ->
-                            ActionExecutor.execute(getApplication(), action)
+                        for (action in parsedActions) {
+                            val result = cn.xxstudy.assistant.intent.ActionRegistry.execute(getApplication(), action)
+                            if (!result.isSuccess) {
+                                // 执行失败或未找到联系人：使用执行结果中的具体提示作为语音播报
+                                executionSpeech = result.message
+                            }
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -330,7 +335,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                     // 2. 意图识别结果：使用优美自然的中文语音播报替代生硬冷冰冰的原始 JSON
                     if (AppSettings.ttsAutoPlay.value) {
-                        val speechText = IntentParser.formatForSpeech(parsedActions)
+                        val speechText = executionSpeech ?: IntentParser.formatForSpeech(parsedActions)
                         speakMessage(thinkingId, speechText)
                     }
                 } else {
@@ -339,6 +344,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         chunker?.onToken(bufferedPrefix.toString())
                     }
                     chunker?.flush()
+
+                    if (AppSettings.ttsAutoPlay.value) {
+                        speechManager.finishStreamingSpeech(
+                            onDone = {
+                                if (_speakingMessageId.value == thinkingId) {
+                                    _speakingMessageId.value = null
+                                }
+                            }
+                        )
+                    }
                 }
 
                 // 推理完成后，附加上最终的性能指标
@@ -397,6 +412,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 text
             }
             _speakingMessageId.value = id
+
             speechManager.speak(
                 text = speechContent,
                 speechRate = AppSettings.ttsSpeechRate.value,
