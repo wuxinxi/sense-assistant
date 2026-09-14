@@ -109,6 +109,24 @@ else
     echo "⚠️ 未在本地检测到完整的 sense-voice-int8 模型，请先运行: bash Script/download_all.sh"
 fi
 
+# 5.1 推送 Sherpa-ONNX KWS 离线语音唤醒模型
+KWS_DIR="$PROJECT_ROOT/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"
+if [ -d "$KWS_DIR" ] && [ -f "$KWS_DIR/tokens.txt" ]; then
+    if ask_push "Sherpa-ONNX 离线语音唤醒模型 (Zipformer 3.3M)"; then
+        LOCAL_TOKENS_SIZE=$(get_local_file_size "$KWS_DIR/tokens.txt")
+        REMOTE_TOKENS_SIZE=$(get_remote_file_size "$TARGET_DIR/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01/tokens.txt")
+        if [ "$REMOTE_TOKENS_SIZE" = "$LOCAL_TOKENS_SIZE" ] && [ "$LOCAL_TOKENS_SIZE" -gt 0 ]; then
+            echo "⚡ 远端已存在完整 KWS 唤醒模型，大小一致，跳过推送。"
+        else
+            echo "🚀 正在推送 KWS 离线语音唤醒模型到手机..."
+            adb push "$KWS_DIR" "$TARGET_DIR/"
+            echo "✅ KWS 唤醒模型推送完成！"
+        fi
+    fi
+else
+    echo "⚠️ 未在本地检测到完整的 sherpa-onnx-kws 模型，请运行: python3 Script/download_models.py"
+fi
+
 # 6. 推送 TTS 语音合成模型 (按配置推送)
 push_tts_model() {
     local dir_name="$1"

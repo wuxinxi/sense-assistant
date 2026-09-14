@@ -24,4 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "app-sense-assistant"
 include(":app")
- 
+include(":libs:kws")

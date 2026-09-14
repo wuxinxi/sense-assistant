@@ -58,6 +58,9 @@ dependencies {
     // 本地原生预编译 AAR / JAR 依赖 (如 sherpa-onnx 离线语音识别底座)
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
 
+    // 独立轻量离线语音唤醒模块 (KWS)
+    implementation(project(":libs:kws"))
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

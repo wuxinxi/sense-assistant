@@ -136,6 +136,11 @@ fun SettingsScreen(
     val ttsSpeakerId by AppSettings.ttsSpeakerId.collectAsState()
     val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
     val localServerEnabled by AppSettings.localServerEnabled.collectAsState()
+    val isKwsEnabled by AppSettings.isKwsEnabled.collectAsState()
+    val kwsKeyword by AppSettings.kwsKeyword.collectAsState()
+    val kwsEnableDing by AppSettings.kwsEnableDing.collectAsState()
+    val showPerformanceOverlay by AppSettings.showPerformanceOverlay.collectAsState()
+    val isLlmEngineEnabled by AppSettings.isLlmEngineEnabled.collectAsState()
 
     val isSpeaking by speechManager.isSpeaking.collectAsState()
     val isBilingualTts by speechManager.isBilingualTts.collectAsState()
@@ -144,6 +149,8 @@ fun SettingsScreen(
     // Dialog 状态控制
     var showModelSelectDialog by remember { mutableStateOf(false) }
     var showTtsModelSelectDialog by remember { mutableStateOf(false) }
+    var showModelManagementDialog by remember { mutableStateOf(false) }
+    var modelToDelete by remember { mutableStateOf<cn.xxstudy.assistant.data.InstalledModelInfo?>(null) }
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
     var showCreditsDialog by remember { mutableStateOf(false) }
@@ -257,6 +264,46 @@ fun SettingsScreen(
             // 模块 1: AI 语音与交互体验
             // ========================================================
             SettingSectionGroup(title = "AI 语音与交互体验") {
+                // 0. 离线语音唤醒 (KWS)
+                SettingItemRow(
+                    icon = Icons.Default.Hearing,
+                    iconBgColor = Color(0xFF4CAF50),
+                    title = "离线语音唤醒",
+                    subtitle = if (isKwsEnabled) "听见「$kwsKeyword」自动唤醒并激活 ASR 倾听" else "唤醒词「$kwsKeyword」，关闭后需手动点击或长按触发",
+                    trailing = {
+                        Switch(
+                            checked = isKwsEnabled,
+                            onCheckedChange = {
+                                triggerHaptic()
+                                AppSettings.setKwsEnabled(it)
+                            }
+                        )
+                    }
+                )
+
+                if (isKwsEnabled) {
+                    SettingRowDivider()
+
+                    // 0.1 唤醒提示音
+                    SettingItemRow(
+                        icon = Icons.Default.NotificationsActive,
+                        iconBgColor = Color(0xFF009688),
+                        title = "唤醒提示音",
+                        subtitle = "唤醒瞬间毫秒级播放短促「滴」声",
+                        trailing = {
+                            Switch(
+                                checked = kwsEnableDing,
+                                onCheckedChange = {
+                                    triggerHaptic()
+                                    AppSettings.setKwsEnableDing(it)
+                                }
+                            )
+                        }
+                    )
+                }
+
+                SettingRowDivider()
+
                 // 1. 识别偏好语言
                 val langLabel = when (asrLanguage) {
                     "zh-CN" -> "中文普通话"
@@ -733,6 +780,25 @@ fun SettingsScreen(
             // 模块 2: 端侧大语言模型 (LLM) 与推理底座
             // ========================================================
             SettingSectionGroup(title = "端侧大语言模型 (LLM) 与推理底座") {
+                // 0. 启用本地大模型作答开关
+                SettingItemRow(
+                    icon = Icons.Default.SmartToy,
+                    iconBgColor = Color(0xFF673AB7),
+                    title = "启用本地大模型作答",
+                    subtitle = if (isLlmEngineEnabled) "装载 GGUF 本地大模型进行深度逻辑作答" else "已关闭大模型（0 显存占用），采用复读回显模式，专用于测试语音全链路",
+                    trailing = {
+                        Switch(
+                            checked = isLlmEngineEnabled,
+                            onCheckedChange = {
+                                triggerHaptic()
+                                AppSettings.setIsLlmEngineEnabled(it)
+                            }
+                        )
+                    }
+                )
+
+                SettingRowDivider()
+
                 val currentCheck = AppSettings.checkModelFile(context, currentModel)
                 SettingItemRow(
                     icon = Icons.Default.Memory,
@@ -963,6 +1029,49 @@ fun SettingsScreen(
                                     if (it) "微服务已开启: 0.0.0.0:8989" else "微服务已停止",
                                     Toast.LENGTH_SHORT
                                 ).show()
+                            }
+                        )
+                    }
+                )
+
+                SettingRowDivider()
+
+                // 本地模型存储与移除管理
+                val installedCount = remember(showModelManagementDialog, modelToDelete) {
+                    AppSettings.getInstalledModels(context).size
+                }
+                SettingItemRow(
+                    icon = Icons.Default.DeleteOutline,
+                    iconBgColor = Color(0xFFE53935),
+                    title = "本地模型存储与移除",
+                    subtitle = "扫描并管理已安装的大模型、语音识别、TTS 与唤醒词文件",
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SettingTagBadge(text = "$installedCount 个已就绪", isSuccess = true)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+                        }
+                    },
+                    onClick = {
+                        triggerHaptic()
+                        showModelManagementDialog = true
+                    }
+                )
+
+                SettingRowDivider()
+
+                // 硬件性能监控状态条常驻
+                SettingItemRow(
+                    icon = Icons.Default.Speed,
+                    iconBgColor = Color(0xFF009688),
+                    title = "硬件性能状态条常驻",
+                    subtitle = "在聊天主界面顶部常驻显示实时 CPU 占用率与内存看板",
+                    trailing = {
+                        Switch(
+                            checked = showPerformanceOverlay,
+                            onCheckedChange = {
+                                triggerHaptic()
+                                AppSettings.setShowPerformanceOverlay(it)
                             }
                         )
                     }
@@ -1347,6 +1456,29 @@ fun SettingsScreen(
                                         )
                                     }
                                 }
+                                if (check.file != null && check.file.exists()) {
+                                    IconButton(
+                                        onClick = {
+                                            triggerHaptic()
+                                            modelToDelete = cn.xxstudy.assistant.data.InstalledModelInfo(
+                                                id = model.id,
+                                                name = model.displayName,
+                                                category = "大语言模型 (LLM)",
+                                                sizeBytes = check.file.length(),
+                                                file = check.file,
+                                                isDirectory = false,
+                                                isCurrentlyActive = isSelected
+                                            )
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "删除该模型",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1355,6 +1487,144 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = { showModelSelectDialog = false }) {
                     Text("完成")
+                }
+            }
+        )
+    }
+
+    // ============================================================
+    // 弹窗: 本地模型存储与移除管理
+    // ============================================================
+    if (showModelManagementDialog) {
+        val installedModels = remember(showModelManagementDialog, modelToDelete) {
+            AppSettings.getInstalledModels(context)
+        }
+
+        AlertDialog(
+            onDismissRequest = { showModelManagementDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("本地模型存储与移除", fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "设备上当前已下载的模型权重与离线语音包如下。点击右侧垃圾桶图标可将其彻底删除并释放磁盘空间。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (installedModels.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("本地暂未检测到已安装的模型", color = MaterialTheme.colorScheme.outline)
+                        }
+                    } else {
+                        installedModels.forEach { modelInfo ->
+                            Card(
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(modelInfo.name, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                            if (modelInfo.isCurrentlyActive) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                SettingTagBadge(text = "使用中", isSuccess = true)
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = "${modelInfo.category} · ${modelInfo.sizeMb} MB",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            triggerHaptic()
+                                            modelToDelete = modelInfo
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "删除模型",
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showModelManagementDialog = false }) {
+                    Text("完成")
+                }
+            }
+        )
+    }
+
+    // 二次确认删除弹窗
+    modelToDelete?.let { model ->
+        AlertDialog(
+            onDismissRequest = { modelToDelete = null },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("确认删除该模型？", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "即将从设备存储中彻底删除：\n【${model.name}】\n\n预计释放存储空间：约 ${model.sizeMb} MB。\n若当前模型正在运行，将自动安全释放内存。"
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        triggerHaptic()
+                        if (model.id == currentModel.id) {
+                            onSwitchModel?.invoke(currentModel)
+                        }
+                        val success = AppSettings.deleteInstalledModel(model)
+                        if (success) {
+                            Toast.makeText(context, "已成功移除 ${model.name}，释放了 ${model.sizeMb}MB 空间", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "删除失败或文件已被占用", Toast.LENGTH_SHORT).show()
+                        }
+                        modelToDelete = null
+                        showModelManagementDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("确认删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { modelToDelete = null }) {
+                    Text("取消")
                 }
             }
         )

@@ -37,6 +37,11 @@ class LlamaEngine {
      * 主动打断当前正在进行的推理任务
      */
     external fun stopGeneration()
+
+    /**
+     * 彻底释放模型及上下文内存占用
+     */
+    external fun releaseContext()
 }
 
 interface LlamaCallback {

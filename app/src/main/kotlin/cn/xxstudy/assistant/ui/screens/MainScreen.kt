@@ -12,6 +12,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,7 +25,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import cn.xxstudy.assistant.data.AppSettings
 import cn.xxstudy.assistant.data.ModelFileStatus
@@ -30,6 +35,8 @@ import cn.xxstudy.assistant.data.ModelType
 import cn.xxstudy.assistant.ui.components.ChatBubble
 import cn.xxstudy.assistant.ui.components.DoubaoInputBar
 import cn.xxstudy.assistant.ui.components.DoubaoVoicePanel
+import cn.xxstudy.assistant.utils.DeviceMetrics
+import cn.xxstudy.assistant.utils.PerformanceMonitor
 import cn.xxstudy.assistant.viewmodel.MainViewModel
 import java.io.File
 
@@ -43,6 +50,20 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val speakingMessageId by viewModel.speakingMessageId.collectAsState()
 
     val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
+    val showPerformanceOverlay by AppSettings.showPerformanceOverlay.collectAsState()
+    val isLlmEngineEnabled by AppSettings.isLlmEngineEnabled.collectAsState()
+    val deviceMetrics by PerformanceMonitor.metrics.collectAsState()
+
+    DisposableEffect(showPerformanceOverlay) {
+        if (showPerformanceOverlay) {
+            PerformanceMonitor.start(context)
+        } else {
+            PerformanceMonitor.stop()
+        }
+        onDispose {
+            PerformanceMonitor.stop()
+        }
+    }
 
     val listeningRms by viewModel.listeningRms.collectAsState()
     val voicePartialText by viewModel.voicePartialText.collectAsState()
@@ -57,8 +78,9 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val density = LocalDensity.current
     val cancelThresholdPx = remember(density) { with(density) { 60.dp.toPx() } }
 
-    // 自动探测并预热本地大模型引擎
-    LaunchedEffect(Unit) {
+    // 自动探测并预热本地大模型引擎（仅在启用大模型时执行）
+    LaunchedEffect(isLlmEngineEnabled) {
+        if (!isLlmEngineEnabled) return@LaunchedEffect
         if (!isModelLoaded && !isLoading) {
             val preferredModel = AppSettings.currentModelType.value
             val primaryCheck = AppSettings.checkModelFile(context, preferredModel)
@@ -147,59 +169,74 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-            // 顶部状态栏
-            Row(
+            // 顶部状态与性能状态栏
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(if (isModelLoaded) Color(0xFF4CAF50) else Color(0xFFFF9800))
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "系统状态: $statusMessage",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        !isLlmEngineEnabled -> Color(0xFF2196F3)
+                                        isModelLoaded -> Color(0xFF4CAF50)
+                                        else -> Color(0xFFFF9800)
+                                    }
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (!isLlmEngineEnabled) "系统状态: 纯语音测试 (大模型未启用)" else "系统状态: $statusMessage",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
+
+                    if (!isModelLoaded && isLlmEngineEnabled) {
+                        Button(
+                            onClick = {
+                                val currentModel = AppSettings.currentModelType.value
+                                val check = AppSettings.checkModelFile(context, currentModel)
+                                if (check.status == ModelFileStatus.READY && check.file != null) {
+                                    viewModel.loadLocalModel(check.file.absolutePath, currentModel)
+                                } else if (check.status == ModelFileStatus.INCOMPLETE) {
+                                    Toast.makeText(context, "⚠️ ${currentModel.displayName} 正在写入中 (${check.currentBytes / 1024 / 1024}MB / ${check.expectedBytes / 1024 / 1024}MB - ${check.progressPercent}%)，请等待传输完成", Toast.LENGTH_LONG).show()
+                                } else {
+                                    val fallbackModel = if (currentModel == ModelType.MINICPM5_2B) ModelType.QWEN_0_5B else ModelType.MINICPM5_2B
+                                    val fallbackCheck = AppSettings.checkModelFile(context, fallbackModel)
+                                    if (fallbackCheck.status == ModelFileStatus.READY && fallbackCheck.file != null) {
+                                        AppSettings.setCurrentModelType(fallbackModel)
+                                        viewModel.loadLocalModel(fallbackCheck.file.absolutePath, fallbackModel)
+                                        Toast.makeText(context, "${currentModel.displayName} 未就绪，已切换为备用模型 ${fallbackModel.displayName}", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "未找到完整的模型文件，请前往【设置】或通过脚本推送", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            enabled = !isLoading,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(12.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Text("启动引擎", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
 
-                if (!isModelLoaded) {
-                    Button(
-                        onClick = {
-                            val currentModel = AppSettings.currentModelType.value
-                            val check = AppSettings.checkModelFile(context, currentModel)
-                            if (check.status == ModelFileStatus.READY && check.file != null) {
-                                viewModel.loadLocalModel(check.file.absolutePath, currentModel)
-                            } else if (check.status == ModelFileStatus.INCOMPLETE) {
-                                Toast.makeText(context, "⚠️ ${currentModel.displayName} 正在写入中 (${check.currentBytes / 1024 / 1024}MB / ${check.expectedBytes / 1024 / 1024}MB - ${check.progressPercent}%)，请等待传输完成", Toast.LENGTH_LONG).show()
-                            } else {
-                                val fallbackModel = if (currentModel == ModelType.MINICPM5_2B) ModelType.QWEN_0_5B else ModelType.MINICPM5_2B
-                                val fallbackCheck = AppSettings.checkModelFile(context, fallbackModel)
-                                if (fallbackCheck.status == ModelFileStatus.READY && fallbackCheck.file != null) {
-                                    AppSettings.setCurrentModelType(fallbackModel)
-                                    viewModel.loadLocalModel(fallbackCheck.file.absolutePath, fallbackModel)
-                                    Toast.makeText(context, "${currentModel.displayName} 未就绪，已切换为备用模型 ${fallbackModel.displayName}", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "未找到完整的模型文件，请前往【设置】或通过脚本推送", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        },
-                        enabled = !isLoading,
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(14.dp), color = Color.White, strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(6.dp))
-                        }
-                        Text("启动引擎", style = MaterialTheme.typography.labelMedium)
-                    }
+                if (showPerformanceOverlay) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    PerformanceBadge(metrics = deviceMetrics)
                 }
             }
 
@@ -310,5 +347,46 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             partialText = voicePartialText,
             modifier = Modifier.align(Alignment.BottomCenter)
         )
+    }
+}
+
+@Composable
+private fun PerformanceBadge(metrics: DeviceMetrics, modifier: Modifier = Modifier) {
+    val isHighLoad = metrics.cpuPercent > 80 || (metrics.totalRamMb > 0 && metrics.availRamMb < 250)
+    val bgColor = if (isHighLoad) Color(0xFFFFEBEE) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    val contentColor = if (isHighLoad) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = bgColor,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Speed,
+                    contentDescription = null,
+                    tint = contentColor,
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = "CPU 占用: ${metrics.cpuPercent}%",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = contentColor
+                )
+            }
+            Text(
+                text = "本应用: ${metrics.appRamMb}MB  |  系统剩余: ${metrics.availRamMb}MB / ${metrics.totalRamMb}MB",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Normal,
+                color = contentColor
+            )
+        }
     }
 }

@@ -35,6 +35,10 @@ Script/.venv/
 /vits-zh-aishell3/
 /llm/
 
+# KWS Models
+/sherpa-onnx-kws-*/
+/kws/
+
 # Compressed Archives
 *.tar.bz2
 *.tar.gz

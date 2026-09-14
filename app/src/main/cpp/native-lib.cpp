@@ -47,6 +47,27 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_stopGeneration(JNIEnv *env, jobject
 }
 
 extern "C"
+JNIEXPORT void JNICALL
+Java_cn_xxstudy_assistant_engine_LlamaEngine_releaseContext(JNIEnv *env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_ctx_mutex);
+    if (g_ctx != nullptr) {
+        LOGI("releaseContext: Releasing existing llama_context...");
+        llama_free(g_ctx);
+        g_ctx = nullptr;
+    }
+    if (g_model != nullptr) {
+        LOGI("releaseContext: Releasing existing llama_model...");
+        llama_model_free(g_model);
+        g_model = nullptr;
+    }
+    g_current_model_path.clear();
+    g_n_past = 0;
+    g_n_keep = 0;
+    g_turn_starts.clear();
+    LOGI("releaseContext: Model and Context completely unloaded.");
+}
+
+extern "C"
 JNIEXPORT jboolean JNICALL
 Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path, jint n_ctx) {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);

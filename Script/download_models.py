@@ -4,6 +4,8 @@
 import os
 import sys
 import time
+import tarfile
+import urllib.request
 from pathlib import Path
 
 # 1. 强制设置国内镜像源并禁用国外直连后端
@@ -79,6 +81,13 @@ TASKS = [
         "allow_patterns": ["model.int8.onnx", "tokens.txt"],
     },
     {
+        "title": "Sherpa-ONNX 离线语音唤醒模型 (Zipformer 3.3M, ~3.5MB)",
+        "type": "archive",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2",
+        "local_dir": PROJECT_ROOT / "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01",
+        "check_file": "tokens.txt",
+    },
+    {
         "title": "MiniCPM5-2B-Q4_K_M (深度思考大模型, ~1.4GB)",
         "repo_id": "openbmb/MiniCPM5-2B-GGUF",
         "local_dir": PROJECT_ROOT / "llm",
@@ -145,8 +154,42 @@ def check_missing_files(api: HfApi, repo_id: str, local_dir: Path, allow_pattern
 
 def download_task(task: dict, max_retries: int = 5, retry_delay: int = 3):
     title = task["title"]
-    repo_id = task["repo_id"]
     local_dir: Path = task["local_dir"]
+
+    if task.get("type") == "archive":
+        check_file = task.get("check_file", "tokens.txt")
+        print("\n" + "=" * 68)
+        print(f"📦 正在处理: {title}")
+        print(f"📂 本地路径: {local_dir}")
+        print("=" * 68)
+        if (local_dir / check_file).exists():
+            print(f"✨ 该模型核心文件已全部就绪 ({check_file} 校验通过)，跳过下载！")
+            return True
+
+        archive_tmp = PROJECT_ROOT / "temp_kws_download.tar.bz2"
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"\n[尝试 {attempt}/{max_retries}] 正在下载官方压缩包...")
+                urllib.request.urlretrieve(task["url"], archive_tmp)
+                print("📦 正在解压至根目录...")
+                with tarfile.open(archive_tmp, "r:bz2") as tar:
+                    tar.extractall(path=PROJECT_ROOT)
+                if archive_tmp.exists():
+                    archive_tmp.unlink()
+                print(f"🎉 成功完成: {title}")
+                return True
+            except Exception as e:
+                print(f"⚠️ [尝试 {attempt}] 下载解压异常: {e}")
+                if archive_tmp.exists():
+                    archive_tmp.unlink()
+                if attempt < max_retries:
+                    print(f"⏳ 将在 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"❌ 任务 [{title}] 达到最大重试次数。")
+                    return False
+
+    repo_id = task["repo_id"]
     allow_patterns = task["allow_patterns"]
 
     print("\n" + "=" * 68)

@@ -7,6 +7,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import cn.xxstudy.assistant.data.AppSettings
+import cn.xxstudy.kws.KwsConfig
+import cn.xxstudy.kws.KwsManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -142,6 +144,7 @@ class SpeechManager(private val context: Context) {
                         val cb = onSpeechDoneCallback
                         onSpeechDoneCallback = null
                         cb?.invoke()
+                        resumeKws()
                     }
                 }
             }
@@ -155,6 +158,7 @@ class SpeechManager(private val context: Context) {
                         val cb = onSpeechDoneCallback
                         onSpeechDoneCallback = null
                         cb?.invoke()
+                        resumeKws()
                     }
                 }
             }
@@ -168,10 +172,65 @@ class SpeechManager(private val context: Context) {
                         val cb = onSpeechDoneCallback
                         onSpeechDoneCallback = null
                         cb?.invoke()
+                        resumeKws()
                     }
                 }
             }
         })
+    }
+
+    // ==========================================
+    // 离线语音唤醒 (KWS) 调度与生命周期协同
+    // ==========================================
+
+    val isKwsListening: Boolean
+        get() = KwsManager.isListening
+
+    val isKwsReady: Boolean
+        get() = KwsManager.isReady
+
+    /**
+     * 一行代码启动 KWS 唤醒监听
+     */
+    fun startKws(onWake: (keyword: String) -> Unit): Boolean {
+        if (!AppSettings.isKwsEnabled.value) return false
+        val keyword = AppSettings.kwsKeyword.value
+        val threshold = AppSettings.kwsThreshold.value
+        val enableDing = AppSettings.kwsEnableDing.value
+
+        return KwsManager.start(
+            context = context,
+            keyword = keyword,
+            config = KwsConfig(
+                defaultKeyword = keyword,
+                threshold = threshold,
+                enableDingSound = enableDing
+            ),
+            onWake = onWake
+        )
+    }
+
+    /**
+     * 暂停 KWS 唤醒监听（释放麦克风给 ASR）
+     */
+    fun pauseKws() {
+        KwsManager.pause()
+    }
+
+    /**
+     * 恢复 KWS 唤醒待机监听（当 ASR 或 TTS 执行结束后调用）
+     */
+    fun resumeKws() {
+        if (AppSettings.isKwsEnabled.value && !isListening.value && !_isSpeaking.value) {
+            KwsManager.resume()
+        }
+    }
+
+    /**
+     * 彻底停止并销毁 KWS
+     */
+    fun stopKws() {
+        KwsManager.stop()
     }
 
     // ==========================================
@@ -184,6 +243,9 @@ class SpeechManager(private val context: Context) {
         onFinal: (String) -> Unit,
         onError: (String) -> Unit
     ) {
+        // 关键：在 ASR 接管麦克风前，强制暂停并释放 KWS 麦克风通道，防止硬件冲突
+        pauseKws()
+
         // 全双工打断（Barge-in）：用户一旦按住或开口说话，立即打断当前所有发音
         stopSpeaking()
 
@@ -191,7 +253,10 @@ class SpeechManager(private val context: Context) {
             language = language,
             onPartial = onPartial,
             onFinal = onFinal,
-            onError = onError
+            onError = { err ->
+                onError(err)
+                resumeKws()
+            }
         )
     }
 
@@ -201,6 +266,7 @@ class SpeechManager(private val context: Context) {
 
     fun cancelListening() {
         asrEngine.cancelListening()
+        resumeKws()
     }
 
     // ==========================================
@@ -351,6 +417,7 @@ class SpeechManager(private val context: Context) {
             val cb = onSpeechDoneCallback
             onSpeechDoneCallback = null
             cb?.invoke()
+            resumeKws()
         }
     }
 
@@ -398,6 +465,7 @@ class SpeechManager(private val context: Context) {
 
     fun destroy() {
         managerScope.cancel()
+        stopKws()
         asrEngine.destroy()
         stopSpeaking()
         ttsPlayer.close()

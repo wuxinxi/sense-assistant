@@ -98,6 +98,12 @@ object AppSettings {
     private const val KEY_TTS_MODEL_ID = "key_tts_model_id"
     private const val KEY_HAPTIC_ENABLED = "key_haptic_enabled"
     private const val KEY_LOCAL_SERVER_ENABLED = "key_local_server_enabled"
+    private const val KEY_KWS_ENABLED = "key_kws_enabled"
+    private const val KEY_KWS_KEYWORD = "key_kws_keyword"
+    private const val KEY_KWS_THRESHOLD = "key_kws_threshold"
+    private const val KEY_KWS_ENABLE_DING = "key_kws_enable_ding"
+    private const val KEY_SHOW_PERFORMANCE_OVERLAY = "key_show_performance_overlay"
+    private const val KEY_IS_LLM_ENGINE_ENABLED = "key_is_llm_engine_enabled"
 
     private lateinit var prefs: SharedPreferences
 
@@ -147,6 +153,25 @@ object AppSettings {
     private val _localServerEnabled = MutableStateFlow(true)
     val localServerEnabled: StateFlow<Boolean> = _localServerEnabled.asStateFlow()
 
+    // 离线语音唤醒 (KWS) 相关配置
+    private val _isKwsEnabled = MutableStateFlow(true)
+    val isKwsEnabled: StateFlow<Boolean> = _isKwsEnabled.asStateFlow()
+
+    private val _kwsKeyword = MutableStateFlow("小乐助")
+    val kwsKeyword: StateFlow<String> = _kwsKeyword.asStateFlow()
+
+    private val _kwsThreshold = MutableStateFlow(0.30f)
+    val kwsThreshold: StateFlow<Float> = _kwsThreshold.asStateFlow()
+
+    private val _kwsEnableDing = MutableStateFlow(true)
+    val kwsEnableDing: StateFlow<Boolean> = _kwsEnableDing.asStateFlow()
+
+    private val _showPerformanceOverlay = MutableStateFlow(true)
+    val showPerformanceOverlay: StateFlow<Boolean> = _showPerformanceOverlay.asStateFlow()
+
+    private val _isLlmEngineEnabled = MutableStateFlow(true)
+    val isLlmEngineEnabled: StateFlow<Boolean> = _isLlmEngineEnabled.asStateFlow()
+
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -175,6 +200,14 @@ object AppSettings {
 
         _hapticEnabled.value = prefs.getBoolean(KEY_HAPTIC_ENABLED, true)
         _localServerEnabled.value = prefs.getBoolean(KEY_LOCAL_SERVER_ENABLED, true)
+
+        _isKwsEnabled.value = prefs.getBoolean(KEY_KWS_ENABLED, true)
+        _kwsKeyword.value = prefs.getString(KEY_KWS_KEYWORD, "小乐助") ?: "小乐助"
+        _kwsThreshold.value = prefs.getFloat(KEY_KWS_THRESHOLD, 0.30f)
+        _kwsEnableDing.value = prefs.getBoolean(KEY_KWS_ENABLE_DING, true)
+
+        _showPerformanceOverlay.value = prefs.getBoolean(KEY_SHOW_PERFORMANCE_OVERLAY, true)
+        _isLlmEngineEnabled.value = prefs.getBoolean(KEY_IS_LLM_ENGINE_ENABLED, true)
     }
 
     fun setTtsModelId(modelId: String) {
@@ -262,6 +295,36 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_LOCAL_SERVER_ENABLED, enabled).apply()
     }
 
+    fun setKwsEnabled(enabled: Boolean) {
+        _isKwsEnabled.value = enabled
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_KWS_ENABLED, enabled).apply()
+    }
+
+    fun setKwsKeyword(keyword: String) {
+        _kwsKeyword.value = keyword
+        if (::prefs.isInitialized) prefs.edit().putString(KEY_KWS_KEYWORD, keyword).apply()
+    }
+
+    fun setKwsThreshold(threshold: Float) {
+        _kwsThreshold.value = threshold
+        if (::prefs.isInitialized) prefs.edit().putFloat(KEY_KWS_THRESHOLD, threshold).apply()
+    }
+
+    fun setKwsEnableDing(enabled: Boolean) {
+        _kwsEnableDing.value = enabled
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_KWS_ENABLE_DING, enabled).apply()
+    }
+
+    fun setShowPerformanceOverlay(enabled: Boolean) {
+        _showPerformanceOverlay.value = enabled
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_SHOW_PERFORMANCE_OVERLAY, enabled).apply()
+    }
+
+    fun setIsLlmEngineEnabled(enabled: Boolean) {
+        _isLlmEngineEnabled.value = enabled
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_IS_LLM_ENGINE_ENABLED, enabled).apply()
+    }
+
     /**
      * 对指定大模型进行全方位物理文件健康度与大小精确检测
      */
@@ -300,4 +363,139 @@ object AppSettings {
     fun isModelAvailable(context: Context, modelType: ModelType): Boolean {
         return checkModelFile(context, modelType).status == ModelFileStatus.READY
     }
+
+    /**
+     * 智能扫描当前设备中所有已安装的端侧大模型、语音模型（ASR/TTS/KWS）
+     */
+    fun getInstalledModels(context: Context): List<InstalledModelInfo> {
+        val list = mutableListOf<InstalledModelInfo>()
+
+        // 1. LLM 大语言模型
+        ModelType.values().forEach { modelType ->
+            val check = checkModelFile(context, modelType)
+            if (check.file != null && check.file.exists()) {
+                list.add(
+                    InstalledModelInfo(
+                        id = modelType.id,
+                        name = modelType.displayName,
+                        category = "大语言模型 (LLM)",
+                        sizeBytes = check.file.length(),
+                        file = check.file,
+                        isDirectory = false,
+                        isCurrentlyActive = (modelType == _currentModelType.value)
+                    )
+                )
+            }
+        }
+
+        // 2. 查找候选路径列表
+        val searchDirs = listOfNotNull(
+            context.getExternalFilesDir(null),
+            context.getExternalFilesDir(null)?.resolve("models"),
+            context.filesDir,
+            context.filesDir.resolve("models"),
+            java.io.File("/sdcard/Android/data/${context.packageName}/files"),
+            java.io.File("/sdcard/Android/data/${context.packageName}/files/models")
+        ).distinct()
+
+        // 3. 语音识别 (SenseVoice)
+        for (dir in searchDirs) {
+            val svDir = java.io.File(dir, "sense-voice-int8")
+            if (svDir.exists() && svDir.isDirectory && !list.any { it.file.absolutePath == svDir.absolutePath }) {
+                val totalSize = svDir.walkTopDown().filter { it.isFile }.map { it.length() }.sum()
+                list.add(
+                    InstalledModelInfo(
+                        id = "sense-voice-int8",
+                        name = "SenseVoice Small (INT8)",
+                        category = "语音识别 (ASR)",
+                        sizeBytes = totalSize,
+                        file = svDir,
+                        isDirectory = true,
+                        isCurrentlyActive = true
+                    )
+                )
+                break
+            }
+        }
+
+        // 4. 语音合成 (TTS)
+        val ttsModels = listOf(
+            "vits-melo-tts-zh_en" to "MeloTTS 中英双语 (VITS)",
+            "kokoro-multi-lang-v1_1" to "Kokoro-82M 拟真人声",
+            "matcha-icefall-zh-baker" to "Matcha-TTS 极速中文"
+        )
+        for ((folder, displayName) in ttsModels) {
+            for (dir in searchDirs) {
+                val ttsDir = java.io.File(dir, folder)
+                if (ttsDir.exists() && ttsDir.isDirectory && !list.any { it.file.absolutePath == ttsDir.absolutePath }) {
+                    val totalSize = ttsDir.walkTopDown().filter { it.isFile }.map { it.length() }.sum()
+                    list.add(
+                        InstalledModelInfo(
+                            id = folder,
+                            name = displayName,
+                            category = "语音合成 (TTS)",
+                            sizeBytes = totalSize,
+                            file = ttsDir,
+                            isDirectory = true,
+                            isCurrentlyActive = (folder == _ttsModelId.value)
+                        )
+                    )
+                    break
+                }
+            }
+        }
+
+        // 5. 语音唤醒 (KWS)
+        val kwsFolders = listOf("sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01", "kws")
+        for (folder in kwsFolders) {
+            for (dir in searchDirs) {
+                val kwsDir = java.io.File(dir, folder)
+                if (kwsDir.exists() && kwsDir.isDirectory && !list.any { it.file.absolutePath == kwsDir.absolutePath }) {
+                    val totalSize = kwsDir.walkTopDown().filter { it.isFile }.map { it.length() }.sum()
+                    list.add(
+                        InstalledModelInfo(
+                            id = "kws-model",
+                            name = "Sherpa-ONNX 离线唤醒词模型",
+                            category = "语音唤醒 (KWS)",
+                            sizeBytes = totalSize,
+                            file = kwsDir,
+                            isDirectory = true,
+                            isCurrentlyActive = true
+                        )
+                    )
+                    break
+                }
+            }
+        }
+
+        return list
+    }
+
+    /**
+     * 物理删除指定的模型文件或文件夹
+     */
+    fun deleteInstalledModel(modelInfo: InstalledModelInfo): Boolean {
+        return try {
+            if (modelInfo.isDirectory) {
+                modelInfo.file.deleteRecursively()
+            } else {
+                modelInfo.file.delete()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+}
+
+data class InstalledModelInfo(
+    val id: String,
+    val name: String,
+    val category: String,
+    val sizeBytes: Long,
+    val file: java.io.File,
+    val isDirectory: Boolean,
+    val isCurrentlyActive: Boolean = false
+) {
+    val sizeMb: Long get() = (sizeBytes / (1024 * 1024)).coerceAtLeast(1)
 }

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import cn.xxstudy.assistant.data.AppSettings
 import cn.xxstudy.assistant.repository.LlamaRepository
 import cn.xxstudy.assistant.speech.SpeechManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,6 +16,8 @@ import cn.xxstudy.assistant.data.ModelType
 import cn.xxstudy.assistant.engine.ThinkingStreamParser
 import cn.xxstudy.assistant.ui.components.ActionExecutor
 import cn.xxstudy.assistant.ui.components.IntentParser
+
+private const val TAG = "MainViewModel"
 
 data class ChatMessage(
     val id: Int,
@@ -64,6 +67,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         AppSettings.init(application)
+        observeKwsState()
+        observeLlmEngineState()
+    }
+
+    private fun observeLlmEngineState() {
+        viewModelScope.launch {
+            AppSettings.isLlmEngineEnabled.collect { enabled ->
+                if (!enabled && _isModelLoaded.value) {
+                    unloadModel()
+                } else if (!enabled) {
+                    _statusMessage.value = "纯语音测试模式 (大模型未启用)"
+                }
+            }
+        }
+    }
+
+    fun unloadModel() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _statusMessage.value = "正在卸载大模型..."
+            repository.unloadModel()
+            _isModelLoaded.value = false
+            _currentLoadedModel.value = null
+            _isLoading.value = false
+            _statusMessage.value = if (AppSettings.isLlmEngineEnabled.value) "尚未启动" else "纯语音测试模式 (大模型未启用)"
+        }
+    }
+
+    private fun observeKwsState() {
+        viewModelScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.flow.combine(
+                AppSettings.isKwsEnabled,
+                AppSettings.kwsKeyword,
+                AppSettings.kwsThreshold
+            ) { enabled, keyword, _ ->
+                enabled to keyword
+            }.collect { (enabled, _) ->
+                if (enabled) {
+                    startKwsListener()
+                } else {
+                    speechManager.stopKws()
+                }
+            }
+        }
+    }
+
+    fun startKwsListener() {
+        if (!AppSettings.isKwsEnabled.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            speechManager.startKws { keyword ->
+                android.util.Log.i(TAG, "🎯 [KWS] 捕获唤醒词: $keyword，平滑启动 SenseVoice ASR 倾听...")
+                viewModelScope.launch(Dispatchers.Main) {
+                    startVoiceRecording(autoSend = true)
+                }
+            }
+        }
     }
 
     fun loadLocalModel(absolutePath: String, modelType: ModelType = AppSettings.currentModelType.value, force: Boolean = false) {
@@ -178,7 +237,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var currentThinkingId: Int? = null
 
     fun sendMessage(prompt: String) {
-        if (!_isModelLoaded.value || prompt.isBlank()) return
+        val trimmed = prompt.trim()
+        if (trimmed.isBlank()) return
+
+        // 停止之前的朗读
+        speechManager.stopSpeaking()
+        _speakingMessageId.value = null
+
+        // 检查是否关闭大模型（纯语音测试 / 复读回显模式）
+        if (!AppSettings.isLlmEngineEnabled.value) {
+            val userMsg = ChatMessage(messageCounter++, true, trimmed)
+            val echoId = messageCounter++
+            val echoMsg = ChatMessage(echoId, false, trimmed)
+            _chatMessages.value = _chatMessages.value + listOf(userMsg, echoMsg)
+
+            if (AppSettings.ttsAutoPlay.value) {
+                _speakingMessageId.value = echoId
+                speechManager.speak(trimmed) {
+                    _speakingMessageId.value = null
+                    speechManager.resumeKws()
+                }
+            } else {
+                speechManager.resumeKws()
+            }
+            return
+        }
+
+        if (!_isModelLoaded.value) return
 
         // 1. 如果上一轮模型还在推理输出，立即打断 C++ 循环并取消旧协程
         if (currentGenerationJob?.isActive == true) {
@@ -452,11 +537,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // 如果开启了自动发送或者当前为按住发送模式且识别内容非空，则直接发送
                 if ((autoSend || AppSettings.asrAutoSend.value) && finalResult.isNotBlank()) {
                     sendMessage(finalResult)
+                } else if (finalResult.isBlank()) {
+                    speechManager.resumeKws()
                 }
             },
             onError = { err ->
                 _voicePartialText.value = null
                 onError(err)
+                speechManager.resumeKws()
             }
         )
     }

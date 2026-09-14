@@ -72,4 +72,17 @@ class LlamaRepository {
             e.printStackTrace()
         }
     }
+
+    /**
+     * 彻底释放模型与上下文，归还所有显存/内存
+     */
+    suspend fun unloadModel() {
+        withContext(Dispatchers.IO) {
+            try {
+                engine.releaseContext()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
 }
