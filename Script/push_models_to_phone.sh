@@ -91,7 +91,7 @@ ask_push() {
 # 5. 推送 SenseVoice ASR 模型
 SENSE_VOICE_DIR="$PROJECT_ROOT/sense-voice-int8"
 if [ -d "$SENSE_VOICE_DIR" ] && [ -f "$SENSE_VOICE_DIR/model.int8.onnx" ] && [ -f "$SENSE_VOICE_DIR/tokens.txt" ]; then
-    if ask_push "SenseVoice 语音识别模型"; then
+    if ask_push "SenseVoice 离线语音识别模型 (高质量)"; then
         LOCAL_ONNX_SIZE=$(get_local_file_size "$SENSE_VOICE_DIR/model.int8.onnx")
         REMOTE_ONNX_SIZE=$(get_remote_file_size "$TARGET_DIR/sense-voice-int8/model.int8.onnx")
         LOCAL_TOKENS_SIZE=$(get_local_file_size "$SENSE_VOICE_DIR/tokens.txt")
@@ -106,7 +106,25 @@ if [ -d "$SENSE_VOICE_DIR" ] && [ -f "$SENSE_VOICE_DIR/model.int8.onnx" ] && [ -
         fi
     fi
 else
-    echo "⚠️ 未在本地检测到完整的 sense-voice-int8 模型，请先运行: bash Script/download_all.sh"
+    echo "⚠️ 未在本地检测到完整的 sense-voice-int8 模型，请先运行下载脚本。"
+fi
+
+# 5.1 推送 Sherpa-ONNX 流式 ASR 模型
+SHERPA_ASR_DIR="$PROJECT_ROOT/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23"
+if [ -d "$SHERPA_ASR_DIR" ] && [ -f "$SHERPA_ASR_DIR/tokens.txt" ]; then
+    if ask_push "Sherpa-ONNX 流式语音识别模型 (极速)"; then
+        LOCAL_TOKENS_SIZE=$(get_local_file_size "$SHERPA_ASR_DIR/tokens.txt")
+        REMOTE_TOKENS_SIZE=$(get_remote_file_size "$TARGET_DIR/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/tokens.txt")
+        if [ "$REMOTE_TOKENS_SIZE" = "$LOCAL_TOKENS_SIZE" ] && [ "$LOCAL_TOKENS_SIZE" -gt 0 ]; then
+            echo "⚡ 远端已存在完整 Sherpa-ONNX 流式识别模型，大小一致，跳过推送。"
+        else
+            echo "🚀 正在推送 Sherpa-ONNX 流式识别模型到手机..."
+            adb push "$SHERPA_ASR_DIR" "$TARGET_DIR/"
+            echo "✅ Sherpa-ONNX 流式识别模型推送完成！"
+        fi
+    fi
+else
+    echo "⚠️ 未在本地检测到完整的 Sherpa-ONNX 流式识别模型，请先运行下载脚本。"
 fi
 
 # 5.1 推送 Sherpa-ONNX KWS 离线语音唤醒模型

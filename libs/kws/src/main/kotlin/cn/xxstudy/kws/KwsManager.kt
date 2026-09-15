@@ -95,7 +95,7 @@ object KwsManager {
         if (!isListeningState.get()) return
         Log.d(TAG, "⏸️ [KWS] 挂起唤醒监听并释放麦克风...")
         recorder?.stop()
-        engine?.reset()
+        // 不在这里 reset stream，由 resume() 统一重建，避免 C++ 层 stream 泄漏
         isListeningState.set(false)
     }
 
@@ -106,16 +106,30 @@ object KwsManager {
     fun resume(): Boolean {
         if (isListeningState.get()) return true
         val eng = engine
-        if (eng == null || !eng.isReady) {
+        if (eng == null || (!eng.isReady && currentKeyword.isBlank())) {
             Log.d(TAG, "KWS 引擎未就绪，无法恢复监听")
             return false
         }
 
-        Log.d(TAG, "▶️ [KWS] 恢复待机监听麦克风...")
-        eng.reset()
-        val started = recorder?.start() ?: false
-        isListeningState.set(started)
-        return started
+        Log.d(TAG, "▶️ [KWS] 恢复待机监听麦克风 (异步)...")
+        // 标记为正在监听，防止重复调用
+        isListeningState.set(true)
+        
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DEFAULT)
+            try {
+                eng.reset() // 核弹级复位，涉及磁盘 IO 和 ONNX 加载
+                val started = recorder?.start() ?: false
+                if (!started) {
+                    isListeningState.set(false)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "异步恢复 KWS 失败: ${e.message}")
+                isListeningState.set(false)
+            }
+        }, "KwsResumeThread").start()
+
+        return true
     }
 
     /**

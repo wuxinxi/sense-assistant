@@ -103,7 +103,10 @@ class KwsAudioRecorder(
                 for (i in 0 until readCount) {
                     floatBuffer[i] = shortBuffer[i] / 32768.0f
                 }
-                onAudioChunk(floatBuffer)
+                // 正常情况 readCount == CHUNK_SIZE，直接传引用（零 GC）；
+                // 仅在录音启停边界 readCount < CHUNK_SIZE 时才分配新数组
+                val chunk = if (readCount == CHUNK_SIZE) floatBuffer else floatBuffer.copyOf(readCount)
+                onAudioChunk(chunk)
             } else if (readCount < 0) {
                 Log.w(TAG, "AudioRecord 读取异常代码: $readCount")
                 break
@@ -118,7 +121,11 @@ class KwsAudioRecorder(
         synchronized(lock) {
             isRecording.set(false)
             try {
-                recordThread?.interrupt()
+                // 等待录音线程自然退出（最多 200ms，即 2 个 chunk 周期）
+                // 注意：如果是在录音线程内部调用 stop，则不能 join 否则会阻塞自己
+                if (Thread.currentThread() != recordThread) {
+                    recordThread?.join(200)
+                }
                 recordThread = null
 
                 audioRecord?.let {

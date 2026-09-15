@@ -32,6 +32,13 @@ android {
         }
     }
 
+    packaging {
+        jniLibs {
+            pickFirsts.add("lib/**/libonnxruntime.so")
+            pickFirsts.add("lib/**/libc++_shared.so")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -55,6 +62,8 @@ android {
 }
 
 dependencies {
+    // VAD (Voice Activity Detection) - 用于离线语音的智能断句与静音检测
+
     // 本地原生预编译 AAR / JAR 依赖 (如 sherpa-onnx 离线语音识别底座)
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
 

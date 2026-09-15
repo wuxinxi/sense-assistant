@@ -12,6 +12,11 @@ enum class ThemeMode(val label: String) {
     DARK("深色模式")
 }
 
+enum class AsrEngineType(val label: String) {
+    SENSE_VOICE("SenseVoice (高质量离线)"),
+    SHERPA_ONNX("Sherpa-ONNX (极速流式)")
+}
+
 enum class ColorTheme(val label: String, val primaryHex: Long) {
     PURPLE("极客紫", 0xFF6750A4),
     BLUE("科技蓝", 0xFF0061A4),
@@ -96,9 +101,12 @@ object AppSettings {
     private const val KEY_TTS_PITCH = "key_tts_pitch"
     private const val KEY_TTS_SPEAKER_ID = "key_tts_speaker_id"
     private const val KEY_TTS_MODEL_ID = "key_tts_model_id"
+    private const val KEY_ASR_ENGINE_TYPE = "key_asr_engine_type"
     private const val KEY_HAPTIC_ENABLED = "key_haptic_enabled"
     private const val KEY_LOCAL_SERVER_ENABLED = "key_local_server_enabled"
     private const val KEY_KWS_ENABLED = "key_kws_enabled"
+    private const val KEY_PHONE_MODE_ENABLED = "key_phone_mode_enabled"
+
     private const val KEY_KWS_KEYWORD = "key_kws_keyword"
     private const val KEY_KWS_THRESHOLD = "key_kws_threshold"
     private const val KEY_KWS_ENABLE_DING = "key_kws_enable_ding"
@@ -147,6 +155,9 @@ object AppSettings {
     private val _ttsModelId = MutableStateFlow("vits-melo-tts-zh_en")
     val ttsModelId: StateFlow<String> = _ttsModelId.asStateFlow()
 
+    private val _asrEngineType = MutableStateFlow(AsrEngineType.SHERPA_ONNX)
+    val asrEngineType: StateFlow<AsrEngineType> = _asrEngineType.asStateFlow()
+
     private val _hapticEnabled = MutableStateFlow(true)
     val hapticEnabled: StateFlow<Boolean> = _hapticEnabled.asStateFlow()
 
@@ -157,10 +168,13 @@ object AppSettings {
     private val _isKwsEnabled = MutableStateFlow(true)
     val isKwsEnabled: StateFlow<Boolean> = _isKwsEnabled.asStateFlow()
 
+    private val _isPhoneModeEnabled = MutableStateFlow(false)
+    val isPhoneModeEnabled: StateFlow<Boolean> = _isPhoneModeEnabled.asStateFlow()
+
     private val _kwsKeyword = MutableStateFlow("小乐助")
     val kwsKeyword: StateFlow<String> = _kwsKeyword.asStateFlow()
 
-    private val _kwsThreshold = MutableStateFlow(0.30f)
+    private val _kwsThreshold = MutableStateFlow(0.20f)
     val kwsThreshold: StateFlow<Float> = _kwsThreshold.asStateFlow()
 
     private val _kwsEnableDing = MutableStateFlow(true)
@@ -190,6 +204,10 @@ object AppSettings {
         _enableThinking.value = prefs.getBoolean(KEY_ENABLE_THINKING, true)
 
         _asrLanguage.value = prefs.getString(KEY_ASR_LANGUAGE, "zh-CN") ?: "zh-CN"
+        
+        val savedAsrEngine = prefs.getString(KEY_ASR_ENGINE_TYPE, AsrEngineType.SHERPA_ONNX.name)
+        _asrEngineType.value = runCatching { AsrEngineType.valueOf(savedAsrEngine ?: AsrEngineType.SHERPA_ONNX.name) }.getOrDefault(AsrEngineType.SHERPA_ONNX)
+        
         _asrAutoSend.value = prefs.getBoolean(KEY_ASR_AUTO_SEND, false)
 
         _ttsAutoPlay.value = prefs.getBoolean(KEY_TTS_AUTO_PLAY, true)
@@ -202,8 +220,10 @@ object AppSettings {
         _localServerEnabled.value = prefs.getBoolean(KEY_LOCAL_SERVER_ENABLED, true)
 
         _isKwsEnabled.value = prefs.getBoolean(KEY_KWS_ENABLED, true)
+        _isPhoneModeEnabled.value = prefs.getBoolean(KEY_PHONE_MODE_ENABLED, false)
+
         _kwsKeyword.value = prefs.getString(KEY_KWS_KEYWORD, "小乐助") ?: "小乐助"
-        _kwsThreshold.value = prefs.getFloat(KEY_KWS_THRESHOLD, 0.30f)
+        _kwsThreshold.value = prefs.getFloat(KEY_KWS_THRESHOLD, 0.20f)
         _kwsEnableDing.value = prefs.getBoolean(KEY_KWS_ENABLE_DING, true)
 
         _showPerformanceOverlay.value = prefs.getBoolean(KEY_SHOW_PERFORMANCE_OVERLAY, true)
@@ -259,6 +279,11 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putString(KEY_ASR_LANGUAGE, language).apply()
     }
 
+    fun setAsrEngineType(engine: AsrEngineType) {
+        _asrEngineType.value = engine
+        if (::prefs.isInitialized) prefs.edit().putString(KEY_ASR_ENGINE_TYPE, engine.name).apply()
+    }
+
     fun setAsrAutoSend(autoSend: Boolean) {
         _asrAutoSend.value = autoSend
         if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_ASR_AUTO_SEND, autoSend).apply()
@@ -294,6 +319,12 @@ object AppSettings {
         _localServerEnabled.value = enabled
         if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_LOCAL_SERVER_ENABLED, enabled).apply()
     }
+
+    fun setPhoneModeEnabled(enabled: Boolean) {
+        _isPhoneModeEnabled.value = enabled
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_PHONE_MODE_ENABLED, enabled).apply()
+    }
+
 
     fun setKwsEnabled(enabled: Boolean) {
         _isKwsEnabled.value = enabled

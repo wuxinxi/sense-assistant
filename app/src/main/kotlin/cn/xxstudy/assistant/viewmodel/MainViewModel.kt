@@ -65,6 +65,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _voicePartialText = MutableStateFlow<String?>(null)
     val voicePartialText: StateFlow<String?> = _voicePartialText.asStateFlow()
 
+    val isListening: StateFlow<Boolean> = speechManager.isListening
+
     init {
         AppSettings.init(application)
         observeKwsState()
@@ -235,6 +237,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // 当前正在进行的推理协程与消息 ID (支持即时打断)
     private var currentGenerationJob: kotlinx.coroutines.Job? = null
     private var currentThinkingId: Int? = null
+    private var _isActiveCall = MutableStateFlow(false)
+    val isActiveCall: StateFlow<Boolean> = _isActiveCall.asStateFlow()
+
 
     fun sendMessage(prompt: String) {
         val trimmed = prompt.trim()
@@ -293,6 +298,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val thinkingMsg = ChatMessage(thinkingId, false, "", isThinking = true)
 
         _chatMessages.value = _chatMessages.value + listOf(userMsg, thinkingMsg)
+
+        // 如果是全双工电话模式，在发送消息后立即再次开启录音，实现随时打断
+        if (_isActiveCall.value) startPhoneMode()
+
 
         currentGenerationJob = viewModelScope.launch {
             // 构造流式思考解析器
@@ -519,7 +528,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ASR 语音输入控制
     // ==========================================
 
+    fun stopPhoneMode() {
+        _isActiveCall.value = false
+
+        cancelVoiceRecording()
+        speechManager.stopSpeaking()
+    }
+
+
+    fun startPhoneMode() {
+        _isActiveCall.value = true
+
+        if (_isActiveCall.value) {
+            startVoiceRecording(autoSend = true, interruptTts = false)
+        }
+    }
+
     fun startVoiceRecording(
+        interruptTts: Boolean = true,
+
         autoSend: Boolean = true,
         onFinalTextReady: (String) -> Unit = {},
         onError: (String) -> Unit = {}
@@ -527,7 +554,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _voicePartialText.value = null
         val language = AppSettings.asrLanguage.value
         speechManager.startListening(
+            interruptTts = interruptTts,
+
             language = language,
+            autoStop = autoSend, // 如果是免提自动发送（KWS唤醒），则开启VAD自动停止；如果是按住说话，则由松手触发停止
+            onVoiceStart = {
+                if (_isActiveCall.value) {
+                    interruptAIAndStartListening()
+                }
+            },
+
             onPartial = { partial ->
                 _voicePartialText.value = partial
             },
@@ -552,6 +588,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopVoiceRecording() {
         speechManager.stopListening()
         _voicePartialText.value = null
+    }
+
+    fun interruptAIAndStartListening() {
+        speechManager.stopSpeaking()
+        _speakingMessageId.value = null
+        if (currentGenerationJob?.isActive == true) {
+            repository.stopGeneration()
+            currentGenerationJob?.cancel()
+            currentThinkingId?.let { oldId ->
+                val list = _chatMessages.value.map {
+                    if (it.id == oldId && (it.isThinking || it.isThinkingActive)) {
+                        val finalMsg = if (it.text.isBlank() && it.thinkingText.isNullOrBlank()) "（已打断）" else it.text
+                        it.copy(text = finalMsg, isThinking = false, isThinkingActive = false)
+                    } else it
+                }
+                _chatMessages.value = list
+            }
+        }
     }
 
     fun cancelVoiceRecording() {

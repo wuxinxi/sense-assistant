@@ -137,6 +137,8 @@ fun SettingsScreen(
     val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
     val localServerEnabled by AppSettings.localServerEnabled.collectAsState()
     val isKwsEnabled by AppSettings.isKwsEnabled.collectAsState()
+    val isPhoneModeEnabled by AppSettings.isPhoneModeEnabled.collectAsState()
+
     val kwsKeyword by AppSettings.kwsKeyword.collectAsState()
     val kwsEnableDing by AppSettings.kwsEnableDing.collectAsState()
     val showPerformanceOverlay by AppSettings.showPerformanceOverlay.collectAsState()
@@ -264,6 +266,23 @@ fun SettingsScreen(
             // 模块 1: AI 语音与交互体验
             // ========================================================
             SettingSectionGroup(title = "AI 语音与交互体验") {
+                SettingItemRow(
+                    icon = Icons.Default.PhoneCallback,
+                    iconBgColor = Color(0xFFE91E63),
+                    title = "电话模式 (全双工对讲)",
+                    subtitle = if (isPhoneModeEnabled) "已开启。在聊天框可见 📞 图标" else "开启后可像打电话一样与 AI 持续交流，支持语音随时打断",
+                    trailing = {
+                        Switch(
+                            checked = isPhoneModeEnabled,
+                            onCheckedChange = {
+                                triggerHaptic()
+                                AppSettings.setPhoneModeEnabled(it)
+                            }
+                        )
+                    }
+                )
+                SettingRowDivider()
+
                 // 0. 离线语音唤醒 (KWS)
                 SettingItemRow(
                     icon = Icons.Default.Hearing,
@@ -298,6 +317,70 @@ fun SettingsScreen(
                                     AppSettings.setKwsEnableDing(it)
                                 }
                             )
+                        }
+                    )
+                }
+
+                SettingRowDivider()
+
+                // ASR 引擎选择
+                val asrEngineType by AppSettings.asrEngineType.collectAsState()
+                var showAsrEngineDialog by remember { mutableStateOf(false) }
+
+                SettingItemRow(
+                    icon = Icons.Default.Speed,
+                    iconBgColor = Color(0xFF009688),
+                    title = "ASR 引擎工作模式",
+                    subtitle = "按需选择极速流式或高质量离线模型",
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(asrEngineType.label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
+                        }
+                    },
+                    onClick = {
+                        triggerHaptic()
+                        showAsrEngineDialog = true
+                    }
+                )
+
+                if (showAsrEngineDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showAsrEngineDialog = false },
+                        title = { Text("选择 ASR 引擎工作模式", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Column {
+                                cn.xxstudy.assistant.data.AsrEngineType.entries.forEach { engine ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                triggerHaptic()
+                                                AppSettings.setAsrEngineType(engine)
+                                                showAsrEngineDialog = false
+                                            }
+                                            .padding(vertical = 12.dp, horizontal = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = (engine == asrEngineType),
+                                            onClick = {
+                                                triggerHaptic()
+                                                AppSettings.setAsrEngineType(engine)
+                                                showAsrEngineDialog = false
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(engine.label, fontSize = 14.sp)
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showAsrEngineDialog = false }) {
+                                Text("取消")
+                            }
                         }
                     )
                 }

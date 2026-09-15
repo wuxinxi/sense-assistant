@@ -39,6 +39,9 @@ Script/.venv/
 /sherpa-onnx-kws-*/
 /kws/
 
+# ASR Models
+/sherpa-onnx-streaming-zipformer-*/
+
 # Compressed Archives
 *.tar.bz2
 *.tar.gz

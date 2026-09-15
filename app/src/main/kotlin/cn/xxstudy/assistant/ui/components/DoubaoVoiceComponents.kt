@@ -19,6 +19,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.PhoneCallback
+
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -271,6 +273,7 @@ fun DoubaoVoicePanel(
     isCancel: Boolean,
     rms: Float,
     partialText: String?,
+    isHandsFree: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -326,10 +329,14 @@ fun DoubaoVoicePanel(
 
                 // 中部：指引文案
                 Text(
-                    text = if (isCancel) "松开手指，取消发送" else "松手发送，上移取消",
+                    text = when {
+                        isHandsFree -> "倾听中，请说话..."
+                        isCancel -> "松开手指，取消发送"
+                        else -> "松手发送，上移取消"
+                    },
                     color = Color.White,
                     fontSize = 15.sp,
-                    fontWeight = if (isCancel) FontWeight.Bold else FontWeight.Medium
+                    fontWeight = if (isCancel && !isHandsFree) FontWeight.Bold else FontWeight.Medium
                 )
 
                 // 底部：动感声浪柱状条
@@ -357,6 +364,8 @@ fun DoubaoInputBar(
     onCameraClick: () -> Unit,
     onPlusClick: () -> Unit,
     onSendClick: () -> Unit,
+    onPhoneClick: (() -> Unit)? = null,
+
     isPressingVoice: Boolean,
     onVoiceDown: () -> Unit,
     onVoiceMove: (deltaY: Float) -> Unit,
@@ -525,6 +534,22 @@ fun DoubaoInputBar(
                 }
 
                 Spacer(modifier = Modifier.width(2.dp))
+
+                if (onPhoneClick != null) {
+                    IconButton(
+                        onClick = onPhoneClick,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhoneCallback,
+                            contentDescription = "电话模式",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(2.dp))
+                }
+
 
                 // 加号更多按钮 (精修 26dp 对齐加号，40dp 点击热区)
                 IconButton(
