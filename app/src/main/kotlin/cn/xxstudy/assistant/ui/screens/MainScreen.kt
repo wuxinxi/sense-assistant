@@ -8,6 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.*
+
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -52,6 +54,10 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
     val showPerformanceOverlay by AppSettings.showPerformanceOverlay.collectAsState()
     val isLlmEngineEnabled by AppSettings.isLlmEngineEnabled.collectAsState()
+    val isPhoneModeEnabled by AppSettings.isPhoneModeEnabled.collectAsState()
+    var isCallScreenVisible by remember { mutableStateOf(false) }
+
+
     val deviceMetrics by PerformanceMonitor.metrics.collectAsState()
 
     DisposableEffect(showPerformanceOverlay) {
@@ -66,6 +72,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     }
 
     val listeningRms by viewModel.listeningRms.collectAsState()
+    val isListening by viewModel.isListening.collectAsState()
     val voicePartialText by viewModel.voicePartialText.collectAsState()
 
     val listState = rememberLazyListState()
@@ -268,6 +275,12 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 onCameraClick = {
                     Toast.makeText(context, "拍照功能暂未开放", Toast.LENGTH_SHORT).show()
                 },
+                onPhoneClick = if (isPhoneModeEnabled) {
+                    { isCallScreenVisible = true; viewModel.startPhoneMode() }
+
+
+                } else null,
+
                 onPlusClick = {
                     Toast.makeText(context, "更多功能暂未开放", Toast.LENGTH_SHORT).show()
                 },
@@ -341,12 +354,28 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
 
         // 豆包沉浸式科技蓝声浪面板 (按住说话时由底部升起展开)
         DoubaoVoicePanel(
-            visible = isPressingVoice,
+            visible = isPressingVoice || isListening,
             isCancel = isCancelVoice,
             rms = listeningRms,
             partialText = voicePartialText,
+            isHandsFree = !isPressingVoice && isListening,
             modifier = Modifier.align(Alignment.BottomCenter)
         )
+
+        AnimatedVisibility(
+            visible = isCallScreenVisible,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            CallScreen(
+                viewModel = viewModel,
+                onClose = {
+                    isCallScreenVisible = false
+                    viewModel.stopPhoneMode()
+                }
+            )
+        }
     }
 }
 

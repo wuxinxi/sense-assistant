@@ -221,6 +221,8 @@ class SpeechManager(private val context: Context) {
      * 恢复 KWS 唤醒待机监听（当 ASR 或 TTS 执行结束后调用）
      */
     fun resumeKws() {
+        if (AppSettings.isPhoneModeEnabled.value) return
+
         if (AppSettings.isKwsEnabled.value && !isListening.value && !_isSpeaking.value) {
             KwsManager.resume()
         }
@@ -238,8 +240,11 @@ class SpeechManager(private val context: Context) {
     // ==========================================
 
     fun startListening(
+        interruptTts: Boolean = true,
         language: String = "zh-CN",
+        autoStop: Boolean = false,
         onPartial: (String) -> Unit = {},
+        onVoiceStart: (() -> Unit)? = null,
         onFinal: (String) -> Unit,
         onError: (String) -> Unit
     ) {
@@ -247,10 +252,15 @@ class SpeechManager(private val context: Context) {
         pauseKws()
 
         // 全双工打断（Barge-in）：用户一旦按住或开口说话，立即打断当前所有发音
-        stopSpeaking()
+        if (interruptTts) {
+            stopSpeaking()
+        }
 
         asrEngine.startListening(
             language = language,
+            autoStop = autoStop,
+            onVoiceStart = onVoiceStart,
+
             onPartial = onPartial,
             onFinal = onFinal,
             onError = { err ->

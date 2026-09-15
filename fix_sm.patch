@@ -1,0 +1,14 @@
+--- /Users/sensiwu/Develop/Vscode/TangRen/app-sense-assistant/app/src/main/kotlin/cn/xxstudy/assistant/speech/SpeechManager.kt
++++ /Users/sensiwu/Develop/Vscode/TangRen/app-sense-assistant/app/src/main/kotlin/cn/xxstudy/assistant/speech/SpeechManager.kt
+@@ -244,7 +244,10 @@
+         onFinal: (String) -> Unit,
+         onError: (String) -> Unit
+     ) {
+-        stopKws() // 录音期间停止唤醒检测
++        // 关键：在 ASR 接管麦克风前，强制暂停并释放 KWS 麦克风通道，防止硬件冲突
++        pauseKws()
++
++        // 全双工打断（Barge-in）：用户一旦按住或开口说话，立即打断当前所有发音
+         stopSpeaking()
+ 
+         asrEngine.startListening(

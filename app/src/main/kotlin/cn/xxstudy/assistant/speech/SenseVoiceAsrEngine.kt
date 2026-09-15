@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.audiofx.AcousticEchoCanceler
+
 import android.media.MediaRecorder
 import android.util.Log
 import androidx.core.app.ActivityCompat
@@ -22,9 +24,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import kotlin.math.log10
 import kotlin.math.sqrt
+
+import java.io.File
+import com.k2fsa.sherpa.onnx.Vad
+import com.k2fsa.sherpa.onnx.VadModelConfig
+import com.k2fsa.sherpa.onnx.SileroVadModelConfig
+import com.k2fsa.sherpa.onnx.TenVadModelConfig
 
 /**
  * [SenseVoiceAsrEngine]
@@ -45,6 +52,8 @@ class SenseVoiceAsrEngine(private val context: Context) {
     // ASR 引擎状态
     private var recognizer: OfflineRecognizer? = null
     private var isEngineReady = false
+    private var vad: Vad? = null
+
 
     // 录音状态
     private val _isListening = MutableStateFlow(false)
@@ -55,6 +64,8 @@ class SenseVoiceAsrEngine(private val context: Context) {
     val listeningRms: StateFlow<Float> = _listeningRms.asStateFlow()
 
     private var audioRecord: AudioRecord? = null
+    private var aec: AcousticEchoCanceler? = null
+
     private var recordJob: Job? = null
     private val bufferLock = Any()
     private val sampleBuffer = PrimitiveFloatBuffer()
@@ -63,17 +74,34 @@ class SenseVoiceAsrEngine(private val context: Context) {
     private var onFinalCallback: ((String) -> Unit)? = null
     private var onErrorCallback: ((String) -> Unit)? = null
 
-    init {
-        scope.launch(Dispatchers.IO) {
-            initEngine()
-        }
-    }
+
 
     /**
      * 检索模型文件存放路径并初始化 Sherpa-ONNX 离线识别器
      */
     fun initEngine(): Boolean {
         if (isEngineReady && recognizer != null) return true
+
+        if (vad == null) {
+            val sileroConfig = SileroVadModelConfig(
+                "silero_vad_v5.onnx", // model
+                0.5f,  // threshold
+                0.8f,  // minSilenceDuration (缩短一点让打断更灵敏)
+                0.1f,  // minSpeechDuration
+                512,   // windowSize
+                20.0f  // maxSpeechDuration
+            )
+            val vadConfig = VadModelConfig(
+                sileroConfig,
+                TenVadModelConfig(), // empty tenVad
+                16000, // sampleRate
+                1,     // numThreads
+                "cpu", // provider
+                false  // debug
+            )
+            vad = Vad(context.assets, vadConfig)
+        }
+
 
         val extFiles = context.getExternalFilesDir(null)
         val intFiles = context.filesDir
@@ -190,7 +218,10 @@ class SenseVoiceAsrEngine(private val context: Context) {
 
     fun startListening(
         language: String = "zh-CN",
+        autoStop: Boolean = false,
         onPartial: (String) -> Unit = {},
+        onVoiceStart: (() -> Unit)? = null,
+
         onFinal: (String) -> Unit,
         onError: (String) -> Unit
     ) {
@@ -225,7 +256,7 @@ class SenseVoiceAsrEngine(private val context: Context) {
 
         try {
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 SAMPLE_RATE,
                 CHANNEL_CONFIG,
                 AUDIO_FORMAT,
@@ -235,9 +266,31 @@ class SenseVoiceAsrEngine(private val context: Context) {
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                 onError("麦克风设备初始化失败，请检查是否被其他应用占用")
                 audioRecord?.release()
+            aec?.release()
+            aec = null
+
                 audioRecord = null
                 return
             }
+
+            if (AcousticEchoCanceler.isAvailable()) {
+                val recordId = audioRecord!!.audioSessionId
+                aec = AcousticEchoCanceler.create(recordId)
+                if (aec != null) {
+                    aec!!.enabled = true
+                    Log.i(TAG, "硬件回声消除 (AEC) 已开启")
+                } else {
+                    Log.w(TAG, "硬件支持 AEC，但创建失败")
+                }
+            } else {
+                Log.w(TAG, "当前设备不支持硬件回声消除 (AEC)")
+            }
+
+
+            vad?.clear()
+            vad?.reset()
+            var hasTriggeredVoiceStart = false
+
 
             audioRecord?.startRecording()
             _isListening.value = true
@@ -247,20 +300,49 @@ class SenseVoiceAsrEngine(private val context: Context) {
 
             recordJob = scope.launch(Dispatchers.IO) {
                 val buffer = ShortArray(1600) // 100ms 音频帧
+                val MAX_RECORD_MS = 20000L
+
                 while (isActive && _isListening.value) {
                     val readCount = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                     if (readCount > 0) {
                         var sum = 0.0
+                        val floatArr = FloatArray(readCount)
                         synchronized(bufferLock) {
                             for (i in 0 until readCount) {
                                 val sample = buffer[i] / 32768.0f
+                                floatArr[i] = sample
                                 sampleBuffer.add(sample)
                                 sum += (buffer[i] * buffer[i]).toDouble()
                             }
                         }
                         val rms = sqrt(sum / readCount)
                         val db = if (rms > 0) (20 * log10(rms)).toFloat() else 0f
+                        
                         _listeningRms.value = db.coerceIn(0f, 100f)
+
+                        // 简单的端点检测 (VAD)
+                        if (autoStop) {
+                            val now = System.currentTimeMillis()
+                            if (now - recordingStartTime > MAX_RECORD_MS) {
+                                Log.i(TAG, "达到最大录音时长，自动停止")
+                                stopListening()
+                                break
+                            }
+                            
+                            // 喂给 Sherpa-ONNX 自带的 Silero VAD 进行检测
+                            vad?.acceptWaveform(floatArr)
+                            if (vad?.isSpeechDetected() == true && !hasTriggeredVoiceStart) {
+                                hasTriggeredVoiceStart = true
+                                onVoiceStart?.invoke()
+                                Log.d(TAG, "VAD: 检测到人声开始说话")
+                            }
+                            if (vad?.empty() == false) {
+                                vad?.pop()
+                                Log.d(TAG, "VAD: 检测到人声结束 (静音)，触发断句")
+                                stopListening()
+                                break
+                            }
+                        }
                     }
                 }
             }
@@ -287,6 +369,9 @@ class SenseVoiceAsrEngine(private val context: Context) {
         try {
             audioRecord?.stop()
             audioRecord?.release()
+            aec?.release()
+            aec = null
+
         } catch (e: Exception) {
             Log.w(TAG, "取消录音时释放 AudioRecord 异常: ${e.message}")
         } finally {
@@ -316,6 +401,9 @@ class SenseVoiceAsrEngine(private val context: Context) {
         try {
             audioRecord?.stop()
             audioRecord?.release()
+            aec?.release()
+            aec = null
+
         } catch (e: Exception) {
             Log.w(TAG, "停止 AudioRecord 发生异常: ${e.message}")
         } finally {

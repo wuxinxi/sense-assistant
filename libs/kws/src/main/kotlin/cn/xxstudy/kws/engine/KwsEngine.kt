@@ -26,7 +26,14 @@ class KwsEngine(
         val PRESET_KEYWORDS = mapOf(
             "小乐助" to listOf(
                 "x iǎo l è zh ù @小乐助",
-                "x iǎo y uè zh ù @小乐助"
+                "x iǎo y uè zh ù @小乐助",
+                "x iǎo l iú zh ù @小乐助",
+                "x iǎo l ōu zh ù @小乐助",
+                "x iǎo l è zh ū @小乐助",
+                "x iǎo l è zh ú @小乐助",
+                "x iǎo n è zh ù @小乐助", // N/L 不分
+                "x iǎo l è z ù @小乐助",  // 平翘舌不分 (ZH -> Z)
+                "x iǎo n è z ù @小乐助"   // N/L + 平翘舌都不分
             ),
             "小爱同学" to listOf("x iǎo ài t óng x ué @小爱同学"),
             "你好问问" to listOf("n ǐ h ǎo w èn w èn @你好问问"),
@@ -96,15 +103,27 @@ class KwsEngine(
         val st = stream ?: return null
 
         try {
+            val startMs = System.currentTimeMillis()
+            var decoded = false
             st.acceptWaveform(samples, sampleRate)
             while (s.isReady(st)) {
                 s.decode(st)
+                decoded = true
             }
+            val elapsed = System.currentTimeMillis() - startMs
+            if (elapsed > 100) {
+                Log.w(TAG, "⚠️ KWS decode 耗时过长: ${elapsed}ms (音频时长: 100ms)，可能导致丢帧！")
+            } else if (decoded) {
+                // normal decode
+            } else {
+                // isReady==false 是 Zipformer chunk 模型的正常行为，无需警告
+            }
+            
             val result = s.getResult(st)
             if (result.keyword.isNotBlank()) {
                 val detected = result.keyword.trim().removePrefix("@").trim()
                 Log.i(TAG, "🎉 [BINGO] 成功检测到唤醒词: $detected (置信度阈值: ${config.threshold})")
-                s.reset(st)
+                // 不在这里 reset，由 handleWakeWordDetected → pause() 统一处理
                 return detected
             }
         } catch (e: Exception) {
@@ -114,14 +133,18 @@ class KwsEngine(
     }
 
     /**
-     * 复位当前音频流状态
+     * 流级复位 (Stream-level Reset)
+     * 因为 sherpa-onnx 的 spotter.reset(stream) 存在未清理 OnlineStream 缓冲区的 Bug (导致多次唤醒后聋了)，
+     * 且核弹级复位 (销毁引擎) 会引起 CPU 飙升。
+     * 最佳方案是：保留 KeywordSpotter 引擎(免去重新加载模型)，仅销毁并重新创建 Stream。
      */
     fun reset() {
         try {
             val s = spotter
-            val st = stream
-            if (s != null && st != null) {
-                s.reset(st)
+            if (s != null) {
+                stream?.release()
+                stream = s.createStream() // 创建新 Stream，彻底重置缓冲区和隐状态，同时继承配置
+                Log.d(TAG, "♻️ KWS Stream 级无感复位完成 (CPU 零波动)")
             }
         } catch (e: Exception) {
             Log.w(TAG, "复位 KWS 流异常: ${e.message}")
@@ -261,19 +284,18 @@ class KwsEngine(
 
         var resolvedFile: File? = null
         try {
-            if (dirKwFile.exists() && dirKwFile.canRead()) {
-                val currentText = dirKwFile.readText()
-                if (currentText.contains(keyword) || (keyword == "小乐助" && currentText.contains("x iǎo l è zh ù"))) {
-                    resolvedFile = dirKwFile
-                }
-            }
-            if (resolvedFile == null) {
-                dirKwFile.writeText(generatedContent)
-                Log.i(TAG, "已为 KWS 模型目录更新 keywords.txt: ${dirKwFile.absolutePath}")
-                resolvedFile = dirKwFile
-            }
+            // 每次启动都强制覆写 keywords.txt，以确保最新的容错音素表（如“小刘柱”口音补偿）能够生效
+            dirKwFile.writeText(generatedContent)
+            resolvedFile = dirKwFile
         } catch (e: Exception) {
-            Log.w(TAG, "写入外部模型目录 keywords.txt 失败(${e.message})，转为写入应用私有存储...")
+            Log.w(TAG, "无法写入模型目录下的 keywords.txt (${e.message})，降级写入沙盒内部")
+            try {
+                internalKwFile.writeText(generatedContent)
+                Log.i(TAG, "已回退写入私有目录 kws_keywords.txt: ${internalKwFile.absolutePath}")
+                resolvedFile = internalKwFile
+            } catch (ex: Exception) {
+                Log.e(TAG, "彻底无法写入任何 keywords.txt: ${ex.message}")
+            }
         }
 
         if (resolvedFile != null && resolvedFile.exists() && resolvedFile.canRead()) {
@@ -295,33 +317,22 @@ class KwsEngine(
     private fun buildKeywordsContent(keyword: String): String {
         val lines = mutableListOf<String>()
 
-        // 1. 如果请求的唤醒词在预设列表中，优先加入
-        PRESET_KEYWORDS[keyword]?.let { lines.addAll(it) }
-
-        // 2. 确保默认唤醒词“小乐助”必定存在
-        if (keyword != "小乐助") {
-            PRESET_KEYWORDS["小乐助"]?.let { lines.addAll(it) }
-        }
-
-        // 3. 加入其他常用预设唤醒词
-        PRESET_KEYWORDS.forEach { (name, ruleList) ->
-            if (name != keyword && name != "小乐助") {
-                lines.addAll(ruleList)
-            }
-        }
-
-        // 4. 如果是自定义且尚未加入的唤醒词（比如已带音素或纯文本）
-        if (!PRESET_KEYWORDS.containsKey(keyword)) {
+        // 1. 如果请求的唤醒词在预设列表中，加入其所有拼音变体（含容错发音）
+        if (PRESET_KEYWORDS.containsKey(keyword)) {
+            PRESET_KEYWORDS[keyword]?.let { lines.addAll(it) }
+        } else {
+            // 2. 如果是自定义的非预设唤醒词
             if (keyword.contains("@") || keyword.contains(" ")) {
-                lines.add(0, keyword)
+                lines.add(keyword)
             } else {
-                val tokensSpaced = keyword.toCharArray().joinToString(" ")
-                lines.add(0, "$tokensSpaced @$keyword")
+                Log.w(TAG, "未知的唤醒词或未提供拼音，尝试使用纯文本: $keyword")
+                lines.add("$keyword @$keyword")
             }
         }
 
-        return lines.distinct().joinToString("\n") + "\n"
+        return lines.joinToString("\n") + "\n"
     }
+
 
     private fun buildSpotterConfig(loc: ModelLocation, keyword: String): KeywordSpotterConfig {
         val featConfig = FeatureConfig(

@@ -1,0 +1,16 @@
+--- /Users/sensiwu/Develop/Vscode/TangRen/app-sense-assistant/libs/kws/src/main/kotlin/cn/xxstudy/kws/engine/KwsEngine.kt
++++ /Users/sensiwu/Develop/Vscode/TangRen/app-sense-assistant/libs/kws/src/main/kotlin/cn/xxstudy/kws/engine/KwsEngine.kt
+@@ -268,6 +268,13 @@
+             resolvedFile = dirKwFile
+         } catch (e: Exception) {
+             Log.w(TAG, "无法写入模型目录下的 keywords.txt (${e.message})，降级写入沙盒内部")
++            try {
++                internalKwFile.writeText(generatedContent)
++                Log.i(TAG, "已回退写入私有目录 kws_keywords.txt: ${internalKwFile.absolutePath}")
++                resolvedFile = internalKwFile
++            } catch (ex: Exception) {
++                Log.e(TAG, "彻底无法写入任何 keywords.txt: ${ex.message}")
++            }
+         }
+ 
+         if (resolvedFile != null && resolvedFile.exists() && resolvedFile.canRead()) {

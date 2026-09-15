@@ -75,10 +75,17 @@ TASKS = [
         ],
     },
     {
-        "title": "SenseVoice Small INT8 (语音识别模型)",
+        "title": "SenseVoice Small INT8 (高质量离线语音识别模型)",
         "repo_id": "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
         "local_dir": PROJECT_ROOT / "sense-voice-int8",
         "allow_patterns": ["model.int8.onnx", "tokens.txt"],
+    },
+    {
+        "title": "Sherpa-ONNX 流式语音识别模型 (Zipformer 14M, 极速响应)",
+        "type": "archive",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2",
+        "local_dir": PROJECT_ROOT / "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23",
+        "check_file": "tokens.txt",
     },
     {
         "title": "Sherpa-ONNX 离线语音唤醒模型 (Zipformer 3.3M, ~3.5MB)",
