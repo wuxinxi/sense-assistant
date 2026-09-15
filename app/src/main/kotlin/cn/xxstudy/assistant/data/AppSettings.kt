@@ -106,6 +106,7 @@ object AppSettings {
     private const val KEY_LOCAL_SERVER_ENABLED = "key_local_server_enabled"
     private const val KEY_KWS_ENABLED = "key_kws_enabled"
     private const val KEY_PHONE_MODE_ENABLED = "key_phone_mode_enabled"
+    private const val KEY_CALL_SUBTITLE_ENABLED = "key_call_subtitle_enabled"
 
     private const val KEY_KWS_KEYWORD = "key_kws_keyword"
     private const val KEY_KWS_THRESHOLD = "key_kws_threshold"
@@ -171,6 +172,9 @@ object AppSettings {
     private val _isPhoneModeEnabled = MutableStateFlow(false)
     val isPhoneModeEnabled: StateFlow<Boolean> = _isPhoneModeEnabled.asStateFlow()
 
+    private val _isCallSubtitleEnabled = MutableStateFlow(true)
+    val isCallSubtitleEnabled: StateFlow<Boolean> = _isCallSubtitleEnabled.asStateFlow()
+
     private val _kwsKeyword = MutableStateFlow("小乐助")
     val kwsKeyword: StateFlow<String> = _kwsKeyword.asStateFlow()
 
@@ -221,6 +225,7 @@ object AppSettings {
 
         _isKwsEnabled.value = prefs.getBoolean(KEY_KWS_ENABLED, true)
         _isPhoneModeEnabled.value = prefs.getBoolean(KEY_PHONE_MODE_ENABLED, false)
+        _isCallSubtitleEnabled.value = prefs.getBoolean(KEY_CALL_SUBTITLE_ENABLED, true)
 
         _kwsKeyword.value = prefs.getString(KEY_KWS_KEYWORD, "小乐助") ?: "小乐助"
         _kwsThreshold.value = prefs.getFloat(KEY_KWS_THRESHOLD, 0.20f)
@@ -323,6 +328,11 @@ object AppSettings {
     fun setPhoneModeEnabled(enabled: Boolean) {
         _isPhoneModeEnabled.value = enabled
         if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_PHONE_MODE_ENABLED, enabled).apply()
+    }
+
+    fun setCallSubtitleEnabled(enabled: Boolean) {
+        _isCallSubtitleEnabled.value = enabled
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_CALL_SUBTITLE_ENABLED, enabled).apply()
     }
 
 

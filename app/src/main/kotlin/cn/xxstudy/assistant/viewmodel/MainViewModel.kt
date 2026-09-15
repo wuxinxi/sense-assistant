@@ -1,6 +1,8 @@
 package cn.xxstudy.assistant.viewmodel
 
 import android.app.Application
+import android.media.AudioManager
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.xxstudy.assistant.data.AppSettings
@@ -530,6 +532,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopPhoneMode() {
         _isActiveCall.value = false
+        
+        val audioManager = getApplication<Application>().getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.mode = AudioManager.MODE_NORMAL
+        audioManager.isSpeakerphoneOn = false
 
         cancelVoiceRecording()
         speechManager.stopSpeaking()
@@ -538,6 +544,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startPhoneMode() {
         _isActiveCall.value = true
+        
+        val audioManager = getApplication<Application>().getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        audioManager.isSpeakerphoneOn = true
 
         if (_isActiveCall.value) {
             startVoiceRecording(autoSend = true, interruptTts = false)

@@ -92,7 +92,7 @@ class TtsAudioTrackPlayer(
             val bufferSize = maxOf(minBufferSize * 2, rate * 4) // ~1s buffer
 
             val attributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
 

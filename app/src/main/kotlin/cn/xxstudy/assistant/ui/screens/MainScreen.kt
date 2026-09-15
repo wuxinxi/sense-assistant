@@ -55,6 +55,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val showPerformanceOverlay by AppSettings.showPerformanceOverlay.collectAsState()
     val isLlmEngineEnabled by AppSettings.isLlmEngineEnabled.collectAsState()
     val isPhoneModeEnabled by AppSettings.isPhoneModeEnabled.collectAsState()
+    val isActiveCall by viewModel.isActiveCall.collectAsState()
     var isCallScreenVisible by remember { mutableStateOf(false) }
 
 
@@ -276,11 +277,17 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     Toast.makeText(context, "拍照功能暂未开放", Toast.LENGTH_SHORT).show()
                 },
                 onPhoneClick = if (isPhoneModeEnabled) {
-                    { isCallScreenVisible = true; viewModel.startPhoneMode() }
-
-
+                    { 
+                        if (isActiveCall) {
+                            isCallScreenVisible = false
+                            viewModel.stopPhoneMode()
+                        } else {
+                            isCallScreenVisible = true
+                            viewModel.startPhoneMode() 
+                        }
+                    }
                 } else null,
-
+                isActiveCall = isActiveCall,
                 onPlusClick = {
                     Toast.makeText(context, "更多功能暂未开放", Toast.LENGTH_SHORT).show()
                 },
@@ -373,6 +380,9 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 onClose = {
                     isCallScreenVisible = false
                     viewModel.stopPhoneMode()
+                },
+                onMinimize = {
+                    isCallScreenVisible = false
                 }
             )
         }
