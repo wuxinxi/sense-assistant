@@ -138,6 +138,7 @@ fun SettingsScreen(
     val localServerEnabled by AppSettings.localServerEnabled.collectAsState()
     val isKwsEnabled by AppSettings.isKwsEnabled.collectAsState()
     val isPhoneModeEnabled by AppSettings.isPhoneModeEnabled.collectAsState()
+    val isCallSubtitleEnabled by AppSettings.isCallSubtitleEnabled.collectAsState()
 
     val kwsKeyword by AppSettings.kwsKeyword.collectAsState()
     val kwsEnableDing by AppSettings.kwsEnableDing.collectAsState()
@@ -277,6 +278,22 @@ fun SettingsScreen(
                             onCheckedChange = {
                                 triggerHaptic()
                                 AppSettings.setPhoneModeEnabled(it)
+                            }
+                        )
+                    }
+                )
+                SettingRowDivider()
+                SettingItemRow(
+                    icon = Icons.Default.Subtitles,
+                    iconBgColor = Color(0xFF673AB7),
+                    title = "电话模式字幕",
+                    subtitle = "在全屏电话界面显示对话文本",
+                    trailing = {
+                        Switch(
+                            checked = isCallSubtitleEnabled,
+                            onCheckedChange = {
+                                triggerHaptic()
+                                AppSettings.setCallSubtitleEnabled(it)
                             }
                         )
                     }

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.PhoneCallback
+import androidx.compose.material.icons.filled.CallEnd
 
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material3.*
@@ -365,6 +366,7 @@ fun DoubaoInputBar(
     onPlusClick: () -> Unit,
     onSendClick: () -> Unit,
     onPhoneClick: (() -> Unit)? = null,
+    isActiveCall: Boolean = false,
 
     isPressingVoice: Boolean,
     onVoiceDown: () -> Unit,
@@ -541,9 +543,9 @@ fun DoubaoInputBar(
                         modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.PhoneCallback,
-                            contentDescription = "电话模式",
-                            tint = MaterialTheme.colorScheme.primary,
+                            imageVector = if (isActiveCall) androidx.compose.material.icons.Icons.Default.CallEnd else androidx.compose.material.icons.Icons.Default.PhoneCallback,
+                            contentDescription = if (isActiveCall) "挂断" else "电话模式",
+                            tint = if (isActiveCall) androidx.compose.ui.graphics.Color(0xFFE53935) else MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(24.dp)
                         )
                     }
