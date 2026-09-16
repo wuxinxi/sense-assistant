@@ -175,7 +175,7 @@ object AppSettings {
     private val _isCallSubtitleEnabled = MutableStateFlow(true)
     val isCallSubtitleEnabled: StateFlow<Boolean> = _isCallSubtitleEnabled.asStateFlow()
 
-    private val _kwsKeyword = MutableStateFlow("小乐助")
+    private val _kwsKeyword = MutableStateFlow("艾诗")
     val kwsKeyword: StateFlow<String> = _kwsKeyword.asStateFlow()
 
     private val _kwsThreshold = MutableStateFlow(0.20f)
@@ -227,7 +227,7 @@ object AppSettings {
         _isPhoneModeEnabled.value = prefs.getBoolean(KEY_PHONE_MODE_ENABLED, false)
         _isCallSubtitleEnabled.value = prefs.getBoolean(KEY_CALL_SUBTITLE_ENABLED, true)
 
-        _kwsKeyword.value = prefs.getString(KEY_KWS_KEYWORD, "小乐助") ?: "小乐助"
+        _kwsKeyword.value = prefs.getString(KEY_KWS_KEYWORD, "艾诗") ?: "艾诗"
         _kwsThreshold.value = prefs.getFloat(KEY_KWS_THRESHOLD, 0.20f)
         _kwsEnableDing.value = prefs.getBoolean(KEY_KWS_ENABLE_DING, true)
 
