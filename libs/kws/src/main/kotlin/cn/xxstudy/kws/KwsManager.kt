@@ -29,13 +29,13 @@ object KwsManager {
     private var wakeCallback: ((keyword: String) -> Unit)? = null
     private val isListeningState = AtomicBoolean(false)
 
-    private var currentKeyword = "小乐助"
+    private var currentKeyword = "艾诗"
     private var currentConfig = KwsConfig()
 
     /**
      * 【一行代码开启监听】
      * @param context 上下文对象
-     * @param keyword 唤醒词（默认“小乐助”）
+     * @param keyword 唤醒词（默认“艾诗”）
      * @param config 细粒度参数配置
      * @param onWake 命中唤醒词时的回调（此时麦克风已释放、滴声已响起）
      */
@@ -43,7 +43,7 @@ object KwsManager {
     @JvmOverloads
     fun start(
         context: Context,
-        keyword: String = "小乐助",
+        keyword: String = "艾诗",
         config: KwsConfig = KwsConfig(defaultKeyword = keyword),
         onWake: (keyword: String) -> Unit
     ): Boolean {

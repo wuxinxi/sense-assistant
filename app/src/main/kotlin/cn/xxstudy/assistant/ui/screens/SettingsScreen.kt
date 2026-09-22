@@ -37,6 +37,15 @@ import cn.xxstudy.assistant.data.ModelType
 import cn.xxstudy.assistant.data.ThemeMode
 import cn.xxstudy.assistant.speech.SpeechManager
 import kotlin.math.roundToInt
+import android.net.Uri
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.documentfile.provider.DocumentFile
+import androidx.core.net.toUri
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class CuratedSpeaker(
     val id: Int,
@@ -117,6 +126,7 @@ val OFFICIAL_CURATED_SPEAKERS = listOf(
 @Composable
 fun SettingsScreen(
     speechManager: SpeechManager,
+    mainViewModel: cn.xxstudy.assistant.viewmodel.MainViewModel? = null,
     onSwitchModel: ((ModelType) -> Unit)? = null,
     onClearChatHistory: () -> Unit,
     onBack: () -> Unit
@@ -1176,6 +1186,252 @@ fun SettingsScreen(
                         )
                     }
                 )
+            }
+
+            // ========================================================
+            // 模块 2.5: Obsidian 离线知识库 (RAG)
+            // ========================================================
+            val isObsidianRagEnabled by AppSettings.isObsidianRagEnabled.collectAsState()
+            val obsidianVaultUri by AppSettings.obsidianVaultUri.collectAsState()
+            val obsidianVaultName by AppSettings.obsidianVaultName.collectAsState()
+            val ragTopK by AppSettings.ragTopK.collectAsState()
+            val ragScoreThreshold by AppSettings.ragScoreThreshold.collectAsState()
+            val ragLastSyncTime by AppSettings.ragLastSyncTime.collectAsState()
+            val ragDocCount by AppSettings.ragDocCount.collectAsState()
+            val ragChunkCount by AppSettings.ragChunkCount.collectAsState()
+
+            val syncProgress by (mainViewModel?.obsidianSyncProgress ?: remember {
+                kotlinx.coroutines.flow.MutableStateFlow(cn.xxstudy.assistant.rag.SyncProgress())
+            }).collectAsState()
+
+            val folderPickerLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocumentTree()
+            ) { uri: Uri? ->
+                if (uri != null) {
+                    try {
+                        context.contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                        val doc = DocumentFile.fromTreeUri(context, uri)
+                        val name = doc?.name ?: "Obsidian Vault"
+                        AppSettings.setObsidianVault(uri.toString(), name)
+                        Toast.makeText(context, "已成功绑定知识库: $name", Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "授权失败: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+
+            SettingSectionGroup(title = "Obsidian 离线知识库 (RAG)") {
+                // 1. 开关
+                SettingItemRow(
+                    icon = Icons.Default.AutoStories,
+                    iconBgColor = Color(0xFF7C4DFF),
+                    title = "启用 Obsidian 知识库检索",
+                    subtitle = if (isObsidianRagEnabled) "已开启 · 大模型回答时将基于笔记自动提供参考" else "基于 BGE 向量模型实现本地离线知识检索增强",
+                    trailing = {
+                        Switch(
+                            checked = isObsidianRagEnabled,
+                            onCheckedChange = {
+                                triggerHaptic()
+                                AppSettings.setObsidianRagEnabled(it)
+                            }
+                        )
+                    }
+                )
+
+                if (isObsidianRagEnabled) {
+                    SettingRowDivider()
+
+                    // 2. 文件夹授权选择
+                    SettingItemRow(
+                        icon = Icons.Default.FolderOpen,
+                        iconBgColor = Color(0xFF3F51B5),
+                        title = "Obsidian Vault 根目录",
+                        subtitle = if (obsidianVaultName.isNotEmpty()) "已绑定: $obsidianVaultName" else "点击授权选取公共目录中的 Vault 文件夹",
+                        trailing = {
+                            FilledTonalButton(
+                                onClick = {
+                                    triggerHaptic()
+                                    folderPickerLauncher.launch(null)
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(if (obsidianVaultUri.isEmpty()) "选择目录" else "更改", fontSize = 12.sp)
+                            }
+                        }
+                    )
+
+                    SettingRowDivider()
+
+                    // 3. 同步控制与状态面板
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "已索引: $ragDocCount 篇笔记 · $ragChunkCount 个分块",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (ragLastSyncTime > 0) {
+                                        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                                        "上次同步: ${sdf.format(Date(ragLastSyncTime))}"
+                                    } else {
+                                        "尚未同步"
+                                    },
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (ragChunkCount > 0) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            triggerHaptic()
+                                            mainViewModel?.clearObsidianKnowledgeBase()
+                                        },
+                                        enabled = !syncProgress.isSyncing,
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("清空", fontSize = 12.sp)
+                                    }
+                                }
+
+                                Button(
+                                    onClick = {
+                                        triggerHaptic()
+                                        if (obsidianVaultUri.isNotEmpty()) {
+                                            mainViewModel?.syncObsidianVault(obsidianVaultUri.toUri())
+                                        } else {
+                                            folderPickerLauncher.launch(null)
+                                        }
+                                    },
+                                    enabled = !syncProgress.isSyncing && obsidianVaultUri.isNotEmpty(),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    if (syncProgress.isSyncing) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("同步中...", fontSize = 12.sp)
+                                    } else {
+                                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("立即同步", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                            thickness = 0.5.dp
+                        )
+
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("召回片段数", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                Text(
+                                    "$ragTopK 个",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Slider(
+                                value = ragTopK.toFloat(),
+                                onValueChange = { AppSettings.setRagTopK(it.roundToInt()) },
+                                valueRange = 1f..8f,
+                                steps = 6
+                            )
+                        }
+
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("最低相关度", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                Text(
+                                    String.format(Locale.getDefault(), "%.2f", ragScoreThreshold),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Slider(
+                                value = ragScoreThreshold,
+                                onValueChange = {
+                                    val rounded = (it * 100).roundToInt() / 100f
+                                    AppSettings.setRagScoreThreshold(rounded)
+                                },
+                                valueRange = 0.50f..0.90f,
+                                steps = 39
+                            )
+                            Text(
+                                text = "误召回较多时提高；经常找不到相关笔记时降低。默认 0.62。",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        // 同步进度或日志
+                        if (syncProgress.message.isNotEmpty()) {
+                            Text(
+                                text = syncProgress.message,
+                                fontSize = 11.sp,
+                                color = if (syncProgress.isSyncing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        // 向量模型状态提示
+                        val embedModel = cn.xxstudy.assistant.rag.KnowledgeRetriever.findEmbeddingModelFile(context)
+                        if (embedModel == null) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "未检测到 BGE 向量模型。请通过 download_models.py 下载 bge-small-zh-v1.5-q8_0.gguf 到 models 目录。",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ========================================================

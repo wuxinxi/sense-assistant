@@ -1,5 +1,11 @@
 package cn.xxstudy.assistant.ui.components
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -21,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,6 +44,9 @@ fun ChatBubble(
     onToggleThinkingCollapsed: (() -> Unit)? = null
 ) {
     val isUser = msg.isUser
+    val context = LocalContext.current
+    val renderAsPlainText = msg.isStreaming ||
+        (msg.isKnowledgeExcerpt && msg.text.length > 16_000)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
@@ -60,9 +70,11 @@ fun ChatBubble(
         }
 
         val displayText = if (!msg.thinkingText.isNullOrBlank()) msg.text.trimStart() else msg.text
-        val parsedActions = if (!isUser && displayText.isNotBlank()) IntentParser.parse(displayText) else null
+        val parsedActions = if (!isUser && !msg.isKnowledgeExcerpt && displayText.isNotBlank()) {
+            IntentParser.parse(displayText)
+        } else null
         val trimmed = displayText.trim()
-        val isPotentialJson = !isUser && (
+        val isPotentialJson = !isUser && !msg.isKnowledgeExcerpt && (
             trimmed.startsWith("[") || 
             trimmed.startsWith("{") || 
             trimmed.startsWith("```json") || 
@@ -83,7 +95,7 @@ fun ChatBubble(
                 Modifier.widthIn(
                     max = if (isUser) 280.dp 
                           else if (!msg.thinkingText.isNullOrBlank()) 340.dp 
-                          else 300.dp
+                          else 420.dp
                 )
             }
         ) {
@@ -156,17 +168,58 @@ fun ChatBubble(
                                     }
                                 }
                             } else {
-                                androidx.compose.runtime.CompositionLocalProvider(
-                                    androidx.compose.material3.LocalContentColor provides if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    androidx.compose.material3.LocalTextStyle provides androidx.compose.ui.text.TextStyle(
+                                if (renderAsPlainText) {
+                                    // Streaming Markdown is intentionally rendered as plain text. Parsing the
+                                    // whole growing document on every snapshot, or parsing a very large RAG
+                                    // excerpt at completion, causes long answers to jank.
+                                    Text(
+                                        text = displayText,
+                                        modifier = Modifier.padding(vertical = 4.dp),
                                         fontSize = 15.sp,
-                                        lineHeight = 22.sp
+                                        lineHeight = 22.sp,
+                                        color = if (isUser) MaterialTheme.colorScheme.onPrimary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                ) {
-                                    com.halilibo.richtext.ui.material3.Material3RichText(
-                                        modifier = Modifier.padding(vertical = 4.dp)
+                                } else {
+                                    androidx.compose.runtime.CompositionLocalProvider(
+                                        androidx.compose.material3.LocalContentColor provides if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        androidx.compose.material3.LocalTextStyle provides androidx.compose.ui.text.TextStyle(
+                                            fontSize = 15.sp,
+                                            lineHeight = 22.sp
+                                        )
                                     ) {
-                                        Markdown(displayText)
+                                        val customRichTextStyle = com.halilibo.richtext.ui.RichTextStyle(
+                                            codeBlockStyle = com.halilibo.richtext.ui.CodeBlockStyle(
+                                                modifier = Modifier
+                                                    .background(
+                                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                                        shape = RoundedCornerShape(8.dp)
+                                                    )
+                                                    .padding(12.dp),
+                                                textStyle = androidx.compose.ui.text.TextStyle(
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontSize = 13.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            ),
+                                            stringStyle = com.halilibo.richtext.ui.string.RichTextStringStyle(
+                                                codeStyle = androidx.compose.ui.text.SpanStyle(
+                                                    background = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontFamily = FontFamily.Monospace
+                                                )
+                                            )
+                                        )
+                                        
+                                        com.halilibo.richtext.ui.material3.Material3RichText(
+                                            modifier = Modifier.padding(vertical = 4.dp),
+                                            style = customRichTextStyle
+                                        ) {
+                                            Markdown(
+                                                content = displayText,
+                                                onLinkClicked = { url -> openMarkdownLink(context, url) }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -191,7 +244,7 @@ fun ChatBubble(
                         }
 
                         // 3. 性能指标与 TTS 语音播放按钮栏
-                        if (!isUser && (!msg.metrics.isNullOrEmpty() || (onSpeakClick != null && msg.text.isNotBlank()))) {
+                        if (!isUser && (!msg.metrics.isNullOrEmpty() || (onSpeakClick != null && msg.text.isNotBlank() && !msg.isKnowledgeExcerpt))) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -211,7 +264,7 @@ fun ChatBubble(
                                     Spacer(modifier = Modifier.weight(1f))
                                 }
 
-                                if (onSpeakClick != null && msg.text.isNotBlank()) {
+                                if (onSpeakClick != null && msg.text.isNotBlank() && !msg.isKnowledgeExcerpt) {
                                     IconButton(
                                         onClick = onSpeakClick,
                                         modifier = Modifier.size(28.dp)
@@ -244,6 +297,7 @@ private fun ThinkingCard(
     onToggleCollapse: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
@@ -311,14 +365,73 @@ private fun ThinkingCard(
                             fontFamily = FontFamily.Monospace
                         )
                     ) {
+                        // 替换过深的缩进，缓解手机屏幕宽度被过度挤压的问题
+                        val optimizedText = thinkingText
+                            .replace(Regex("^ {8,}", RegexOption.MULTILINE), "    ")
+                            .replace(Regex("^ {4,7}", RegexOption.MULTILINE), "  ")
+                            .ifBlank { "正在组织思考链路..." }
+                            
+                        val customRichTextStyle = com.halilibo.richtext.ui.RichTextStyle(
+                            codeBlockStyle = com.halilibo.richtext.ui.CodeBlockStyle(
+                                modifier = Modifier
+                                    .background(
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    .padding(10.dp),
+                                textStyle = androidx.compose.ui.text.TextStyle(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                                )
+                            ),
+                            stringStyle = com.halilibo.richtext.ui.string.RichTextStringStyle(
+                                codeStyle = androidx.compose.ui.text.SpanStyle(
+                                    background = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            )
+                        )
+
                         com.halilibo.richtext.ui.material3.Material3RichText(
-                            modifier = Modifier.padding(vertical = 4.dp)
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            style = customRichTextStyle
                         ) {
-                            Markdown(thinkingText.ifBlank { "正在组织思考链路..." })
+                            Markdown(
+                                content = optimizedText,
+                                onLinkClicked = { url -> openMarkdownLink(context, url) }
+                            )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** Avoid ActivityNotFoundException for Obsidian/custom or relative links. */
+private fun openMarkdownLink(context: Context, rawUrl: String) {
+    val url = rawUrl.trim()
+    if (url.isEmpty()) return
+
+    try {
+        val uri = Uri.parse(url)
+        if (uri.scheme.isNullOrBlank()) {
+            // 笔记内链（Obsidian wiki-link 等），无法在 Android 中打开，静默忽略
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (intent.resolveActivity(context.packageManager) == null) {
+            Toast.makeText(context, "设备没有可打开此链接的应用", Toast.LENGTH_SHORT).show()
+            return
+        }
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, "设备没有可打开此链接的应用", Toast.LENGTH_SHORT).show()
+    } catch (_: RuntimeException) {
+        Toast.makeText(context, "链接格式无效", Toast.LENGTH_SHORT).show()
     }
 }

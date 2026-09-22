@@ -85,7 +85,7 @@ enum class ModelType(
 object AppSettings {
     private const val PREFS_NAME = "sense_assistant_settings"
 
-    private const val SYSTEM_PROMPT = "你是端侧智能助手iash。请用简明扼要的中文回答用户的问题。"
+    private const val SYSTEM_PROMPT = "你是端侧智能助手iash。请尽量提供有帮助、详细的准确回答。"
 
     // Keys
     private const val KEY_THEME_MODE = "key_theme_mode"
@@ -113,6 +113,16 @@ object AppSettings {
     private const val KEY_KWS_ENABLE_DING = "key_kws_enable_ding"
     private const val KEY_SHOW_PERFORMANCE_OVERLAY = "key_show_performance_overlay"
     private const val KEY_IS_LLM_ENGINE_ENABLED = "key_is_llm_engine_enabled"
+
+    // RAG Knowledge Base
+    private const val KEY_OBSIDIAN_RAG_ENABLED = "key_obsidian_rag_enabled"
+    private const val KEY_OBSIDIAN_VAULT_URI = "key_obsidian_vault_uri"
+    private const val KEY_OBSIDIAN_VAULT_NAME = "key_obsidian_vault_name"
+    private const val KEY_RAG_TOP_K = "key_rag_top_k"
+    private const val KEY_RAG_SCORE_THRESHOLD = "key_rag_score_threshold"
+    private const val KEY_RAG_LAST_SYNC_TIME = "key_rag_last_sync_time"
+    private const val KEY_RAG_DOC_COUNT = "key_rag_doc_count"
+    private const val KEY_RAG_CHUNK_COUNT = "key_rag_chunk_count"
 
     private lateinit var prefs: SharedPreferences
 
@@ -190,6 +200,31 @@ object AppSettings {
     private val _isLlmEngineEnabled = MutableStateFlow(true)
     val isLlmEngineEnabled: StateFlow<Boolean> = _isLlmEngineEnabled.asStateFlow()
 
+    // Obsidian 知识库 (RAG) 配置流
+    private val _isObsidianRagEnabled = MutableStateFlow(false)
+    val isObsidianRagEnabled: StateFlow<Boolean> = _isObsidianRagEnabled.asStateFlow()
+
+    private val _obsidianVaultUri = MutableStateFlow("")
+    val obsidianVaultUri: StateFlow<String> = _obsidianVaultUri.asStateFlow()
+
+    private val _obsidianVaultName = MutableStateFlow("")
+    val obsidianVaultName: StateFlow<String> = _obsidianVaultName.asStateFlow()
+
+    private val _ragTopK = MutableStateFlow(3)
+    val ragTopK: StateFlow<Int> = _ragTopK.asStateFlow()
+
+    private val _ragScoreThreshold = MutableStateFlow(0.60f)
+    val ragScoreThreshold: StateFlow<Float> = _ragScoreThreshold.asStateFlow()
+
+    private val _ragLastSyncTime = MutableStateFlow(0L)
+    val ragLastSyncTime: StateFlow<Long> = _ragLastSyncTime.asStateFlow()
+
+    private val _ragDocCount = MutableStateFlow(0)
+    val ragDocCount: StateFlow<Int> = _ragDocCount.asStateFlow()
+
+    private val _ragChunkCount = MutableStateFlow(0)
+    val ragChunkCount: StateFlow<Int> = _ragChunkCount.asStateFlow()
+
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -233,6 +268,57 @@ object AppSettings {
 
         _showPerformanceOverlay.value = prefs.getBoolean(KEY_SHOW_PERFORMANCE_OVERLAY, true)
         _isLlmEngineEnabled.value = prefs.getBoolean(KEY_IS_LLM_ENGINE_ENABLED, true)
+
+        // 初始化 RAG 知识库配置
+        _isObsidianRagEnabled.value = prefs.getBoolean(KEY_OBSIDIAN_RAG_ENABLED, false)
+        _obsidianVaultUri.value = prefs.getString(KEY_OBSIDIAN_VAULT_URI, "") ?: ""
+        _obsidianVaultName.value = prefs.getString(KEY_OBSIDIAN_VAULT_NAME, "") ?: ""
+        _ragTopK.value = prefs.getInt(KEY_RAG_TOP_K, 3).coerceIn(1, 8)
+        _ragScoreThreshold.value = prefs.getFloat(KEY_RAG_SCORE_THRESHOLD, 0.60f).coerceIn(0.50f, 0.90f)
+        _ragLastSyncTime.value = prefs.getLong(KEY_RAG_LAST_SYNC_TIME, 0L)
+        _ragDocCount.value = prefs.getInt(KEY_RAG_DOC_COUNT, 0)
+        _ragChunkCount.value = prefs.getInt(KEY_RAG_CHUNK_COUNT, 0)
+    }
+
+    fun setObsidianRagEnabled(enabled: Boolean) {
+        _isObsidianRagEnabled.value = enabled
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_OBSIDIAN_RAG_ENABLED, enabled).apply()
+    }
+
+    fun setObsidianVault(uri: String, name: String) {
+        _obsidianVaultUri.value = uri
+        _obsidianVaultName.value = name
+        if (::prefs.isInitialized) {
+            prefs.edit()
+                .putString(KEY_OBSIDIAN_VAULT_URI, uri)
+                .putString(KEY_OBSIDIAN_VAULT_NAME, name)
+                .apply()
+        }
+    }
+
+    fun setRagTopK(k: Int) {
+        val safeValue = k.coerceIn(1, 8)
+        _ragTopK.value = safeValue
+        if (::prefs.isInitialized) prefs.edit().putInt(KEY_RAG_TOP_K, safeValue).apply()
+    }
+
+    fun setRagScoreThreshold(threshold: Float) {
+        val safeValue = threshold.coerceIn(0.50f, 0.90f)
+        _ragScoreThreshold.value = safeValue
+        if (::prefs.isInitialized) prefs.edit().putFloat(KEY_RAG_SCORE_THRESHOLD, safeValue).apply()
+    }
+
+    fun updateRagSyncStats(docCount: Int, chunkCount: Int, syncTime: Long = System.currentTimeMillis()) {
+        _ragDocCount.value = docCount
+        _ragChunkCount.value = chunkCount
+        _ragLastSyncTime.value = syncTime
+        if (::prefs.isInitialized) {
+            prefs.edit()
+                .putInt(KEY_RAG_DOC_COUNT, docCount)
+                .putInt(KEY_RAG_CHUNK_COUNT, chunkCount)
+                .putLong(KEY_RAG_LAST_SYNC_TIME, syncTime)
+                .apply()
+        }
     }
 
     fun setTtsModelId(modelId: String) {
@@ -502,6 +588,28 @@ object AppSettings {
                             file = kwsDir,
                             isDirectory = true,
                             isCurrentlyActive = true
+                        )
+                    )
+                    break
+                }
+            }
+        }
+
+        // 6. 文本嵌入向量模型 (RAG)
+        val embedModelNames = listOf("bge-small-zh-v1.5-q8_0.gguf", "bge-small-zh-v1.5.gguf", "bge-small-zh-v1.5-f16.gguf")
+        for (mName in embedModelNames) {
+            for (dir in searchDirs) {
+                val f = java.io.File(dir, mName)
+                if (f.exists() && f.isFile && !list.any { it.file.absolutePath == f.absolutePath }) {
+                    list.add(
+                        InstalledModelInfo(
+                            id = mName,
+                            name = "BGE-Small 中文嵌入向量模型",
+                            category = "知识库向量 (RAG)",
+                            sizeBytes = f.length(),
+                            file = f,
+                            isDirectory = false,
+                            isCurrentlyActive = _isObsidianRagEnabled.value
                         )
                     )
                     break

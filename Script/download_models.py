@@ -106,6 +106,12 @@ TASKS = [
         "local_dir": PROJECT_ROOT / "llm",
         "allow_patterns": ["qwen2.5-0.5b-instruct-q4_k_m.gguf"],
     },
+    {
+        "title": "BGE-Small-ZH-v1.5 (端侧离线向量嵌入模型, ~26MB/46MB)",
+        "repo_id": "CompendiumLabs/bge-small-zh-v1.5-gguf",
+        "local_dir": PROJECT_ROOT / "llm",
+        "allow_patterns": ["bge-small-zh-v1.5-q8_0.gguf", "bge-small-zh-v1.5-f16.gguf"],
+    },
 ]
 
 

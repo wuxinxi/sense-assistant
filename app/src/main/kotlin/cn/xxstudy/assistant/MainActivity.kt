@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
                         AppNavScreen.SETTINGS -> {
                             SettingsScreen(
                                 speechManager = viewModel.speechManager,
+                                mainViewModel = viewModel,
                                 onSwitchModel = { model ->
                                     viewModel.switchModel(this@MainActivity, model)
                                 },

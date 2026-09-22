@@ -120,17 +120,18 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     var autoScrollToBottom by remember { mutableStateOf(true) }
     val isDragged by listState.interactionSource.collectIsDraggedAsState()
 
-    // 监听用户手势拖动
-    LaunchedEffect(isDragged) {
-        if (isDragged) {
-            // 用户主动拖拽时，若向上滑动（下方尚有内容），暂停自动吸底
-            if (listState.canScrollForward) {
+    // 只要用户实际移动了列表，就暂停吸底。不能只在 isDragged 刚变为 true 时判断，
+    // 因为那一帧仍可能位于底部，canScrollForward 还没有更新。
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                isDragged
+            )
+        }.collect { (_, _, dragged) ->
+            if (dragged) {
                 autoScrollToBottom = false
-            }
-        } else {
-            // 手指松开时，若已在最底部，恢复自动吸底
-            if (!listState.canScrollForward) {
-                autoScrollToBottom = true
             }
         }
     }
@@ -160,12 +161,9 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     ) {
         if (chatMessages.isNotEmpty() && autoScrollToBottom) {
             val targetIndex = chatMessages.size - 1
-            val lastItem = listState.layoutInfo.visibleItemsInfo.find { it.index == targetIndex }
-            val offset = if (lastItem != null) {
-                val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-                (lastItem.size - viewportHeight + 100).coerceAtLeast(0)
-            } else 0
-            listState.scrollToItem(targetIndex, offset)
+            // 使用足够大的 offset 让 Compose 将最后一个 item 放到真正的底部。
+            // 根据当前可见 item 的 size 计算 offset 会在 Markdown 重新布局时跳到中间。
+            listState.scrollToItem(targetIndex, Int.MAX_VALUE)
         }
     }
 

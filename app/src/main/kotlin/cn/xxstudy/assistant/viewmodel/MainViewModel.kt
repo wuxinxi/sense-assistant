@@ -29,7 +29,11 @@ data class ChatMessage(
     val isThinkingActive: Boolean = false,
     val isThinkingCollapsed: Boolean = true,
     val isThinking: Boolean = false,
-    val metrics: String? = null
+    val metrics: String? = null,
+    /** Knowledge-base excerpts are source material, never executable intent JSON. */
+    val isKnowledgeExcerpt: Boolean = false,
+    /** Keeps streaming answers on the lightweight text renderer until completion. */
+    val isStreaming: Boolean = false
 )
 
 /**
@@ -96,6 +100,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _currentLoadedModel.value = null
             _isLoading.value = false
             _statusMessage.value = if (AppSettings.isLlmEngineEnabled.value) "尚未启动" else "纯语音测试模式 (大模型未启用)"
+        }
+    }
+
+    // Obsidian 知识库 (RAG) 同步引擎
+    val obsidianSyncManager by lazy { cn.xxstudy.assistant.rag.ObsidianSyncManager(getApplication()) }
+    val obsidianSyncProgress = obsidianSyncManager.progress
+    private val knowledgeRetriever by lazy { cn.xxstudy.assistant.rag.KnowledgeRetriever(getApplication()) }
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            obsidianSyncManager.refreshStats()
+        }
+    }
+
+    fun syncObsidianVault(treeUri: android.net.Uri) {
+        viewModelScope.launch {
+            obsidianSyncManager.syncVault(treeUri)
+        }
+    }
+
+    fun clearObsidianKnowledgeBase() {
+        viewModelScope.launch(Dispatchers.IO) {
+            obsidianSyncManager.clearKnowledgeBase()
         }
     }
 
@@ -297,7 +324,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // 3. 插入新 AI "思考中" 占位
         val thinkingId = messageCounter++
         currentThinkingId = thinkingId
-        val thinkingMsg = ChatMessage(thinkingId, false, "", isThinking = true)
+        val thinkingMsg = ChatMessage(thinkingId, false, "", isThinking = true, isStreaming = true)
 
         _chatMessages.value = _chatMessages.value + listOf(userMsg, thinkingMsg)
 
@@ -314,19 +341,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val enableThinking = AppSettings.enableThinking.value
             val currentModel = _currentLoadedModel.value ?: AppSettings.currentModelType.value
             
+            var ragContextPrompt = ""
+            var ragMatches: List<cn.xxstudy.assistant.rag.KnowledgeMatch> = emptyList()
+            val isExplicitRagLookup = cn.xxstudy.assistant.rag.RagQueryNormalizer
+                .isExplicitKnowledgeLookup(prompt)
+            if (AppSettings.isObsidianRagEnabled.value) {
+                try {
+                    val matches = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        // 默认只检索当前问题，避免切换话题时被上一轮内容污染。
+                        val ragQuery = cn.xxstudy.assistant.rag.RagQueryNormalizer.normalize(prompt)
+                        android.util.Log.d(
+                            "MainViewModel",
+                            "RAG query prepared: inputChars=${prompt.trim().length}, searchChars=${ragQuery.length}"
+                        )
+                        val seeds = knowledgeRetriever.retrieve(ragQuery)
+                        if (isExplicitRagLookup) {
+                            knowledgeRetriever.expandMatchedSections(seeds, maxChars = 64_000)
+                        } else {
+                            seeds
+                        }
+                    }
+                    if (matches.isNotEmpty()) {
+                        ragMatches = matches
+                        if (!isExplicitRagLookup) {
+                            ragContextPrompt = cn.xxstudy.assistant.rag.RagPromptBuilder.build(matches)
+                        }
+                        android.util.Log.i("MainViewModel", "RAG: Injected ${matches.size} chunks into prompt")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MainViewModel", "RAG retrieval error", e)
+                }
+            }
+
+            // “通过知识库查询 X”表达的是查阅原文，而不是让小模型二次改写。
+            // 直接返回完整命中章节，既不会遗漏后续分块，也不会引入模型幻觉。
+            if (isExplicitRagLookup && ragMatches.isNotEmpty()) {
+                val extractiveAnswer = cn.xxstudy.assistant.rag.RagGroundingGuard
+                    .buildExtractiveFallback(ragMatches, maxChars = 64_000)
+                _chatMessages.value = _chatMessages.value.map { message ->
+                    if (message.id == thinkingId) {
+                        message.copy(
+                            text = extractiveAnswer,
+                            isThinking = false,
+                            isThinkingActive = false,
+                            metrics = "知识库原文 · ${ragMatches.size} 个分块",
+                            isKnowledgeExcerpt = true,
+                            isStreaming = false
+                        )
+                    } else {
+                        message
+                    }
+                }
+                android.util.Log.i(
+                    "MainViewModel",
+                    "RAG explicit lookup: expandedChunks=${ragMatches.size}, chars=${extractiveAnswer.length}"
+                )
+                if (currentThinkingId == thinkingId) {
+                    currentThinkingId = null
+                }
+                return@launch
+            }
+
             var finalPrompt = ""
-            if (isFirstTurn) {
+            // RAG requests are made self-contained and start from a clean KV cache. This
+            // prevents a previous generic answer from overpowering the retrieved evidence.
+            if (isFirstTurn || ragMatches.isNotEmpty()) {
                 val sysText = AppSettings.getEffectiveSystemPrompt(currentModel)
                 finalPrompt += "<|im_start|>system\n$sysText"
                 if (!enableThinking && currentModel.supportsThinking) {
                     finalPrompt += "\n请直接给出最终回答，无需输出思考过程。"
                 }
                 finalPrompt += "<|im_end|>\n"
-            } else if (!enableThinking && currentModel.supportsThinking) {
-                // 后续轮次若不想思考，通常不需要再次强调，但为了保险依然可以简短补一句，这里我们选择仅在首轮注入即可
             }
-            
-            finalPrompt += "<|im_start|>user\n$prompt<|im_end|>\n<|im_start|>assistant\n"
+
+            if (ragContextPrompt.isNotEmpty()) {
+                finalPrompt += "<|im_start|>user\n${ragContextPrompt}\n\n我的问题是：${prompt}<|im_end|>\n<|im_start|>assistant\n"
+            } else {
+                finalPrompt += "<|im_start|>user\n${prompt}<|im_end|>\n<|im_start|>assistant\n"
+            }
             
             if (!enableThinking && currentModel.supportsThinking) {
                 finalPrompt = "<|system_cmd_disable_thinking|>" + finalPrompt
@@ -338,7 +430,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var hasDecidedStreamType = false
             val bufferedPrefix = StringBuilder()
 
-            if (AppSettings.ttsAutoPlay.value) {
+            if (AppSettings.ttsAutoPlay.value && ragMatches.isEmpty()) {
                 chunker = speechManager.createSentenceChunker()
                 _speakingMessageId.value = thinkingId
                 // 核心安全绑定：
@@ -371,8 +463,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 for (token in channel) {
                     parser.feed(token)
                     val now = System.currentTimeMillis()
-                    // 每 40ms 更新一次 UI 即可保持视觉流畅度，极大地节省 CPU 资源
-                    if (now - lastUpdateTime > 40) {
+                    // 每 60ms 更新一次 UI 即可保持视觉流畅度，极大地节省 CPU 资源
+                    if (now - lastUpdateTime > 60) {
                         lastUpdateTime = now
                         val snapshot = parser.getSnapshot()
                         val newList = _chatMessages.value.toMutableList()
@@ -382,7 +474,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 text = snapshot.answerText,
                                 thinkingText = snapshot.thinkingText,
                                 isThinkingActive = snapshot.isThinkingActive,
-                                isThinking = false
+                                isThinking = false,
+                                isStreaming = true
                             )
                             _chatMessages.value = newList
                         }
@@ -391,6 +484,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
+                if (ragMatches.isNotEmpty()) {
+                    repository.resetSession()
+                }
                 // 调用带有打断检测的推理方法
                 val rawResponse = repository.generateText(finalPrompt) { token ->
                     channel.trySend(token)
@@ -413,7 +509,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                val parsedActions = IntentParser.parse(actualText)
+                var groundedText = cn.xxstudy.assistant.rag.RagGroundingGuard.ensureGrounded(
+                    generated = actualText,
+                    matches = ragMatches
+                )
+                if (groundedText != actualText) {
+                    android.util.Log.w(
+                        "MainViewModel",
+                        "RAG answer failed grounding check; using retrieved excerpts"
+                    )
+                }
+
+                // 后处理：将模型回答中的笔记引用（如 [Fluro.md]）转为 Obsidian 可点击深链接
+                if (ragMatches.isNotEmpty()) {
+                    val docNames = ragMatches.map { it.docName }.distinct()
+                    for (doc in docNames) {
+                        val link = cn.xxstudy.assistant.rag.RagGroundingGuard.buildObsidianLink(doc)
+                        if (link != null) {
+                            // 替换 [docName] 格式的引用为 [docName](obsidian://...)
+                            groundedText = groundedText.replace("[$doc]", "[$doc]($link)")
+                            // 也处理不带 .md 后缀的引用
+                            val noExt = doc.removeSuffix(".md")
+                            groundedText = groundedText.replace("[$noExt]", "[$noExt]($link)")
+                        }
+                    }
+                }
+
+                val parsedActions = if (ragMatches.isEmpty()) {
+                    IntentParser.parse(groundedText)
+                } else {
+                    null
+                }
                 if (parsedActions != null) {
                     var executionSpeech: String? = null
                     // 1. 言出法随：后台静默/自动执行识别出的硬件或系统指令，无需用户手动点击
@@ -441,7 +567,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     chunker?.flush()
 
-                    if (AppSettings.ttsAutoPlay.value) {
+                    if (AppSettings.ttsAutoPlay.value && chunker != null) {
                         speechManager.finishStreamingSpeech(
                             onDone = {
                                 if (_speakingMessageId.value == thinkingId) {
@@ -464,19 +590,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val finalUpdatedList = _chatMessages.value.map {
                     if (it.id == thinkingId) {
                         it.copy(
-                            text = actualText,
+                            text = groundedText,
                             thinkingText = finalSnapshot.thinkingText,
                             isThinkingActive = false,
                             isThinking = false,
-                            metrics = metricsInfo
+                            metrics = metricsInfo,
+                            isStreaming = false
                         )
                     } else it
                 }
                 _chatMessages.value = finalUpdatedList
 
                 // 兜底朗读：仅在未开启流式切句且非意图识别消息时执行整句播报
-                if (chunker == null && parsedActions == null && AppSettings.ttsAutoPlay.value && actualText.isNotBlank() && actualText != "（回复为空）") {
-                    speakMessage(thinkingId, actualText)
+                if (chunker == null && parsedActions == null && AppSettings.ttsAutoPlay.value && groundedText.isNotBlank() && groundedText != "（回复为空）") {
+                    speakMessage(thinkingId, groundedText)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 收到新消息打断时，安全退出并停止当前朗读
@@ -505,7 +632,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val speechContent = if (parsedActions != null) {
                 IntentParser.formatForSpeech(parsedActions)
             } else {
-                text
+                sanitizeSpeechText(text)
             }
             _speakingMessageId.value = id
 
@@ -522,6 +649,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
     }
+
+    /** Remove Markdown/source-code noise before sending a normal answer to TTS. */
+    private fun sanitizeSpeechText(text: String): String = text
+        .replace(Regex("```[\\s\\S]*?```"), " ")
+        .replace(Regex("`([^`]*)`"), "$1")
+        .replace(Regex("(?m)^\\s{0,3}#{1,6}\\s*"), "")
+        .replace(Regex("!\\[[^]]*]\\([^)]*\\)"), " ")
+        .replace(Regex("[ *_>#]"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     // 麦克风实时输入音量分贝 (供 HUD 波动动效)
     val listeningRms: StateFlow<Float> = speechManager.listeningRms

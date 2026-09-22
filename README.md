@@ -6,6 +6,7 @@
   <img src="https://img.shields.io/badge/ASR-SenseVoice%20Small%20INT8-cyan.svg" alt="ASR">
   <img src="https://img.shields.io/badge/LLM-llama.cpp%20C%2B%2B17%20(MiniCPM5%20%2F%20Qwen2.5)-orange.svg" alt="LLM">
   <img src="https://img.shields.io/badge/TTS-MeloTTS%20%2F%20Kokoro%20%2F%20Matcha-magenta.svg" alt="TTS">
+  <img src="https://img.shields.io/badge/RAG-Obsidian%20%2B%20BGE%20Small%20GGUF-green.svg" alt="RAG">
   <img src="https://img.shields.io/badge/Speed-36%20tokens%2Fs%20(Pure%20CPU)-red.svg" alt="Speed">
   <img src="https://img.shields.io/badge/Microservice-Ktor%20%2B%20SSE-purple.svg" alt="Server">
   <img src="https://img.shields.io/badge/Privacy-100%25%20Offline%20Edge-success.svg" alt="Privacy">
@@ -27,7 +28,7 @@
 
 利用闲置的旧安卓设备（实测三星 Galaxy S20 / 一加 11 / 高通骁龙 865 & 8 Gen 2），通过纯原生 **Android NDK + C++17** 封装 `llama.cpp`，深挖 ARMv8.2-A 点积指令集算力，在 **纯 CPU 环境下实现了 36 token/s 的高吞吐推理**。
 
-在此基础上，项目全面集成了阿里开源的 **SenseVoice Small INT8 离线流式语音识别**引擎与高保真 **MeloTTS 44.1kHz 中英双语离线语音合成**引擎（基于 `sherpa-onnx`），构建了**“端侧即时语音识别 (ASR) $\rightarrow$ 端侧大模型流式思考 (LLM) $\rightarrow$ 端侧高保真语音朗读 (TTS) $\rightarrow$ 局域网 OpenAI 兼容微服务”**的 100% 离线完整闭环架构。配以豆包同款极简胶囊交互、36 频段动态声浪动效与 5 款精调人声预设，将手机变身为随身携带、绝对安全的高性能离线 AI 协处理器。
+在此基础上，项目全面集成了阿里开源的 **SenseVoice Small INT8 离线流式语音识别**引擎、高保真 **MeloTTS 44.1kHz 中英双语离线语音合成**引擎（基于 `sherpa-onnx`），以及专为私人笔记打造的 **纯端侧 Obsidian 离线知识库 (RAG)**，构建了**“端侧即时语音识别 (ASR) $\rightarrow$ 端侧 Obsidian 私人知识库匹配 (RAG) $\rightarrow$ 端侧大模型流式思考 (LLM) $\rightarrow$ 端侧高保真语音朗读 (TTS) $\rightarrow$ 局域网 OpenAI 兼容微服务”**的 100% 离线完整闭环架构。配以豆包同款极简胶囊交互、36 频段动态声浪动效与 5 款精调人声预设，将手机变身为随身携带、绝对安全的高性能离线 AI 协处理器。
 
 ---
 
@@ -48,6 +49,13 @@
     - **MeloTTS 44.1kHz**：VITS 架构超清引擎。内置 5 款精调人声预设（御姐/萝莉/书生等），支持语速与音调的独立无级调节。
   - **标点优先流式断句 (Strict Punctuation-First)**：首个逗号/句号即触发音频渲染，日常问候短句仅需 **~640ms 极速出声**，彻底根治长句合成带来的高延迟真空期与中文词组生硬截断；
   - **单调递增 Token 抢占式硬件打断**：底层维护全局原子代数，当发生用户插话（Barge-in）或模型生成新纪元（Generation）时，纳秒级拦截并丢弃即将回流的 PCM 脏数据，同时毫秒级 `flush` 声卡缓冲队列，根绝任何残余语音重叠。
+- 📚 **纯离线 Obsidian 私人知识库与极简端侧 RAG (Retrieval-Augmented Generation)**：
+  - **SAF 目录授权与合规持久化**：采用 Android 原生 `ActivityResultContracts.OpenDocumentTree()`，用户精准授权公共目录下的 Obsidian Vault，调用 `takePersistableUriPermission` 固化只读权限，重启免弹窗，避免申请 `MANAGE_EXTERNAL_STORAGE`；
+  - **专为 Obsidian 定制的结构化分块 (`MarkdownChunker`)**：自动剥离 YAML Frontmatter 头部元数据（tags, date 等），递归维护多级标题面包屑树，为每个切片注入 `[笔记: 笔记名 > 标题路径]` 语义前缀，配合滑动窗口（300 字符 + 50 字符重叠）确保段落语义完整；
+  - **轻量依赖并复用既有 llama.cpp 原生内核**：仅使用 AndroidX DocumentFile 访问 SAF 目录，不引入庞大的 ONNX Runtime 或 Python/LangChain 运行时；向量计算直接复用 `llama.cpp`，加载约 25MB 的 `bge-small-zh-v1.5-q8_0.gguf`；
+  - **与模型一致的 CLS Pooling、L2 归一化与点积检索**：在 JNI C++ 层按 BGE 模型元数据使用 CLS Pooling，并执行 L2 归一化（$\|V\|=1.0$），Kotlin 层可用点积计算余弦相似度；检索同时使用可调绝对阈值、相对分差和单文档结果上限抑制误召回；
+  - **SQLite BLOB 紧凑存储与可靠增量比对**：512 维浮点向量以二进制 `BLOB`（2048 字节 LittleEndian）存入 SQLite。结合 SAF `lastModified` 与文件大小判断变化；单篇索引失败时事务回滚并保留上一版可用索引，下次同步自动重试；
+  - **Companion 静态内存缓存与安全 Prompt 装配**：只在同步版本变化时重读 SQLite，减少重复 I/O 与全表向量反序列化；检索资料与用户问题使用清晰边界隔离，资料不足时明确说明，并防止笔记内容覆盖助手规则。
 - 🎨 **商业级极简交互与专业 Markdown 渲染引擎**：
   - 底部极简胶囊栏（`DoubaoInputBar`），支持**“单击切换键盘 / 长按语音输入”**双模手势体系；
   - 36 频段自适应动效声浪面板（`DoubaoVoicePanel`），实时跟随麦克风输入分贝流畅律动；
@@ -83,8 +91,18 @@ flowchart TD
         ASR_Result["文本清洗与逆文本正则化 (ITN)"]
     end
 
+    subgraph RAG["端侧离线知识库 (Obsidian RAG)"]
+        SAF["SAF 目录授权与变更监听 (DocumentFile)"]
+        Chunker_RAG["MarkdownChunker (元数据剥离/面包屑树/滑窗)"]
+        Embed["EmbeddingEngine (复用 llama.cpp / L2归一化)"]
+        DB["SQLite BLOB 向量数据库 (2048B LittleEndian)"]
+        Cache["Companion In-Memory 静态内存池 (~1.5ms 检索)"]
+        Retriever["KnowledgeRetriever (纯点积余弦检索)"]
+    end
+
     subgraph Core["端侧计算中枢 (MainViewModel & Repository)"]
         VM["MainViewModel 状态中枢"]
+        Prompt["Prompt 组装 (资料前置注入 + 防近期偏差)"]
         Interrupt["即时打断与单调递增 Generation Token"]
         Channel["Kotlin Channel<String> (50ms 防抖批处理)"]
     end
@@ -110,8 +128,11 @@ flowchart TD
 
     UI_Voice --> ASR_Record --> ASR_Engine --> ASR_Result --> VM
     UI_Text --> VM
+    SAF --> Chunker_RAG --> Embed --> DB --> Cache --> Retriever
+    VM --> Retriever
+    Retriever --> Prompt
+    Prompt --> Interrupt --> Mutex --> Llama
     UI_Tuning -. 实时调优 .-> VitsEngine
-    VM --> Interrupt --> Mutex --> Llama
     Interrupt -. 抢占式清空 .-> TrackPlayer
     Qwen -.-> Llama
     Llama --> Channel --> UI_Wave & VM
@@ -164,6 +185,9 @@ bash Script/push_models_to_phone.sh
 3. **MeloTTS 44.1kHz 中英双语高保真语音合成模型**：
    - 官方发布仓库：[vits-melo-tts-zh_en](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models)
    - 目标文件：`model.onnx` (FP32，推荐性能模式 ~156MB)、`lexicon.txt`、`tokens.txt`、`dict/` 目录及 `*.fst` 规则文件。
+4. **BGE-Small-zh-v1.5 端侧向量嵌入模型 (Obsidian RAG)**：
+   - HuggingFace/ModelScope：[CompendiumLabs/bge-small-zh-v1.5-gguf](https://huggingface.co/CompendiumLabs/bge-small-zh-v1.5-gguf)
+   - 目标文件：`bge-small-zh-v1.5-q8_0.gguf`（约 25MB，512 维稠密向量）。
 
 通过 ADB 推送至应用沙盒目录并授权：
 
@@ -179,8 +203,9 @@ adb push sense-voice-int8/tokens.txt /sdcard/Android/data/cn.xxstudy.assistant/f
 # 推送语音合成模型 (MeloTTS 44.1kHz 完整目录)
 adb push vits-melo-tts-zh_en/. /sdcard/Android/data/cn.xxstudy.assistant/files/models/vits-melo-tts-zh_en/
 
-# 推送大语言模型
+# 推送大语言模型与知识库向量模型
 adb push qwen2.5-0.5b-instruct-q4_k_m.gguf /sdcard/Android/data/cn.xxstudy.assistant/files/
+adb push bge-small-zh-v1.5-q8_0.gguf /sdcard/Android/data/cn.xxstudy.assistant/files/
 
 # 关键：授予读写权限，避免沙盒读权限被拒绝
 adb shell "chmod -R 777 /sdcard/Android/data/cn.xxstudy.assistant/files"
@@ -351,6 +376,61 @@ externalNativeBuild {
 2. **长连接常驻流式写入**：保持 `AudioTrack(STREAM_MUSIC, 44100Hz, CHANNEL_OUT_MONO, PCM_16BIT, MODE_STREAM)` 处于连续播放状态，多段音频通过线程安全队列平滑喂入；
 3. **静默优雅休眠**：仅在所有句子分段均播报完毕且队列为空时，才进入休眠释放 CPU，实现 CD 级高保真（44.1kHz）平滑连贯朗读。
 
+### 踩坑 9：C++ JNI `llama_decode` 越界崩溃与 `n_tokens > 512` 防呆截断
+
+在端侧为长笔记切片或长 Prompt 计算 Embedding 向量时，若切片文本的分词（Tokenize）长度超过 512，调用 `llama_decode` 会触发底层 `llama.cpp` 的断言失败或直接 `SIGSEGV` 崩溃。
+
+**底层机理解析：**
+- `bge-small-zh-v1.5` 模型的原生最大上下文序列长度为 512（`n_ctx = 512`）；
+- 底层 C++ 初始化批处理时，若 `llama_batch_init(n_tokens, ...)` 传入的 `n_tokens > 512`，或 `llama_decode(ctx, batch)` 尝试解码超长序列，会直接破坏 KV/Embedding 缓冲区边界，引发显存/内存越界或断言异常。
+
+**工程解法 —— 双重防呆截断机制：**
+1. **JNI C++ 物理防线**：在 `native-lib.cpp` 的 `Java_cn_xxstudy_assistant_engine_EmbeddingEngine_nativeEmbed` 中，执行强类型上限截断：
+   ```cpp
+   if (n_tokens > 512) {
+       n_tokens = 512; // 强行截断，坚决杜绝超长导致 llama_decode 越界崩溃
+   }
+   ```
+2. **切片器前端保护**：在 `MarkdownChunker` 中将滑动窗口大小严格设定为 300 字符（外加 50 字符重叠），中文字符经分词后通常约为 350~450 Token，天然保持在 512 安全阈值内，构建软硬双保险。
+
+### 踩坑 10：SQLite 频繁反序列化 GC 掉帧与 Companion 静态内存池治理
+
+在端侧 RAG 架构中，若每次用户输入提问，都通过 SQLite 全表扫描读取成百上千条切片的 2048 字节 LittleEndian BLOB 并在 Kotlin 堆中逐一反序列化为 `FloatArray(512)`：
+- **延迟高**：单次检索因密集的 I/O 与对象分配，检索延迟高达 **40~80ms**；
+- **年轻代 GC 停顿**：每次检索瞬间在 JVM 堆内存中分配数兆短生命周期临时数组，频繁触发 Android ART 虚拟机的并发垃圾回收（Concurrent Mark Sweep GC），导致 UI 渲染帧率严重抖动。
+
+**工程解法 —— Companion In-Memory 静态内存池：**
+1. **全局单例常驻内存**：在 `KnowledgeRetriever` 中构建静态缓存 `@Volatile private var cachedChunks: List<StoredChunk>? = null`；
+2. **版本化惰性失效**：记录 `cachedSyncTime`，仅当监测到 `AppSettings.ragLastSyncTime.value` 发生实质递增（即用户触发了知识库同步）时，才重新读取 SQLite 刷新内存池；
+3. **极速纯点积检索**：日常对话提问时，直接在常驻内存中并行遍历切片，执行无开方开销的点积（Dot Product）相似度打分。
+   - 在包含 1000+ 切片的知识库中，可避免每次查询重新读取并反序列化全表向量，显著减少 I/O 与短生命周期对象分配。
+
+### 踩坑 11：大语言模型近期偏差 (Recency Bias) 与 Prompt 资料前置注入
+
+在端侧 RAG 实践中，若将知识库检索到的参考资料拼接在整个 Prompt 的最末尾（例如紧挨着用户问题之后），大模型在自回归生成时极易受注意力衰减中的“近期偏差 (Recency Bias / Lost in the Middle)”负面干扰：
+- **核心提问被稀释**：大模型误将参考资料的末尾段落作为当前指令主体，甚至忽略了用户真正的提问；
+- **幻觉与拒答交替**：若模版定义不严格，模型容易“脑补”不存在的事实，或在资料微弱匹配时粗暴拒答。
+
+**工程解法 —— 结构化 Prompt 注入模版：**
+采用“系统设定 $\rightarrow$ 结构化知识库参考资料（前置） $\rightarrow$ 用户核心问题（后置） $\rightarrow$ 引导词锚定”的标准工程范式：
+```text
+<|im_start|>system
+你是端侧智能助手。请结合提供的参考资料，专业、准确地回答用户的问题。
+
+【参考资料（来源自本地 Obsidian 笔记）】
+[资料 1] (来源: 架构设计 > 核心流转)
+...
+[资料 2] (来源: 运维排查 > 踩坑记录)
+...
+
+【用户问题】
+Android 端侧 RAG 如何保证毫秒级检索响应？
+
+请优先依据上述参考资料回答；如果资料不足，请如实告知。需要补充通用知识时，应与笔记事实明确区分。<|im_end|>
+<|im_start|>assistant
+```
+- **效果**：资料与问题边界清晰，用户核心问题保持在 Prompt 末端；同时将笔记标记为参考数据，降低弱相关召回和笔记内指令对回答的干扰。
+
 ---
 
 ## 📂 仓库目录结构
@@ -358,8 +438,8 @@ externalNativeBuild {
 ```text
 app-sense-assistant/
 ├── Script/
-│   ├── download_all.sh               # 一键自动下载 Qwen2.5, SenseVoice 与 MeloTTS 模型
-│   ├── download_models.py            # ModelScope 镜像源极速拉取脚本
+│   ├── download_all.sh               # 一键自动下载 Qwen2.5, SenseVoice, MeloTTS 与 BGE 模型
+│   ├── download_models.py            # 国内镜像源极速拉取脚本 (HuggingFace Mirror / ModelScope)
 │   └── push_models_to_phone.sh       # 一键 ADB 灌入手机沙盒并配置权限
 ├── app/
 │   ├── libs/
@@ -367,12 +447,21 @@ app-sense-assistant/
 │   ├── src/main/
 │   │   ├── cpp/
 │   │   │   ├── CMakeLists.txt        # NDK 硬件优化指令与库链接
-│   │   │   ├── native-lib.cpp        # JNI 封装、互斥锁与即时打断逻辑
+│   │   │   ├── native-lib.cpp        # JNI 封装、互斥锁、Embedding 与即时打断逻辑
 │   │   │   └── include/              # llama.cpp 与 ggml C++ 头文件
 │   │   ├── jniLibs/arm64-v8a/        # 预编译 libllama.so, libggml.so, libomp.so
 │   │   └── kotlin/cn/xxstudy/assistant/
-│   │       ├── data/AppSettings.kt   # 全局持久化配置（主题、人声预设、语速、音调等）
-│   │       ├── engine/LlamaEngine.kt # JNI 桥接与推理生命周期管理
+│   │       ├── data/AppSettings.kt   # 全局持久化配置（主题、人声预设、语速、音调、RAG开关等）
+│   │       ├── engine/
+│   │       │   ├── LlamaEngine.kt           # JNI 桥接与大模型推理生命周期管理
+│   │       │   └── EmbeddingEngine.kt       # JNI 桥接与 BGE-Small 向量模型生命周期管理
+│   │       ├── rag/
+│   │       │   ├── chunker/
+│   │       │   │   └── MarkdownChunker.kt   # Obsidian 结构化分块 (剥离 Frontmatter/面包屑树/滑窗)
+│   │       │   ├── db/
+│   │       │   │   └── KnowledgeDatabaseHelper.kt # SQLite BLOB 向量持久化 (2048B LittleEndian)
+│   │       │   ├── KnowledgeRetriever.kt    # 静态内存缓存、阈值过滤与纯点积相似度检索
+│   │       │   └── ObsidianSyncManager.kt   # SAF 目录遍历、增量时间戳比对与同步中枢
 │   │       ├── repository/           # 模型抽象包装与打断调度
 │   │       ├── server/LlamaServer.kt # Ktor 嵌入式 HTTP 服务 (OpenAI 协议)
 │   │       ├── speech/
@@ -386,7 +475,7 @@ app-sense-assistant/
 │   │       │   │   └── DoubaoVoiceComponents.kt # 豆包胶囊、36频段声浪面板
 │   │       │   ├── screens/
 │   │       │   │   ├── MainScreen.kt            # 聊天主页面
-│   │       │   │   └── SettingsScreen.kt        # 商业级 Inset-Grouped 设置中心
+│   │       │   │   └── SettingsScreen.kt        # 商业级 Inset-Grouped 设置中心 (含 RAG 知识库配置)
 │   │       │   └── theme/                       # Material 3 动态色彩体系
 │   │       └── viewmodel/MainViewModel.kt       # MVVM 状态流与并发解耦中枢
 │   └── build.gradle.kts
@@ -398,6 +487,7 @@ app-sense-assistant/
 ## 🗺️ 后续演进规划 (Roadmap)
 
 - [x] **端侧离线语音合成 (TTS) 深度适配**：集成 Kokoro, Matcha, MeloTTS 等高保真引擎与多模型热插拔架构，实现“听-想-说”一体的全闭环；
+- [x] **纯端侧 Obsidian 离线知识库 (RAG) 闭环**：SAF 目录精准授权、BGE-Small GGUF 向量化、SQLite BLOB 存储与极速点积检索；
 - [ ] **NPU / GPU 硬件加速探索**：基于 Qualcomm QNN 或 OpenCL / Vulkan 尝试激活 Adreno GPU 协同推理；
 - [ ] **长上下文 KV Cache 压缩**：针对移动端内存压力，研究 Context 滚动窗口与滑动截断策略。
 
@@ -414,4 +504,3 @@ app-sense-assistant/
 ## 📄 开源许可证
 
 本项目遵循 [Apache License 2.0](LICENSE) 开源许可证。
-

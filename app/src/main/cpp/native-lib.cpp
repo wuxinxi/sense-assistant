@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <chrono>
 #include <atomic>
 #include <mutex>
@@ -198,9 +199,8 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)V");
     
     const char *prompt_cstr = env->GetStringUTFChars(prompt, nullptr);
-    LOGI("Received prompt: %s", prompt_cstr);
-    
     std::string prompt_str(prompt_cstr);
+    LOGI("Received prompt: %zu bytes", prompt_str.size());
     
     bool disable_thinking = false;
     std::string disable_flag = "<|system_cmd_disable_thinking|>";
@@ -229,7 +229,14 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
 
     auto t_start = std::chrono::high_resolution_clock::now();
     uint32_t n_ctx = llama_n_ctx(g_ctx);
-    int max_predict = 1536;
+    // A 1536-token unconditional reserve leaves almost no room for prompt and
+    // conversation history in the common 2048-token context. Keep answers
+    // bounded and always leave the current prompt inside the context window.
+    if (n_tokens >= static_cast<int>(n_ctx)) {
+        env->ReleaseStringUTFChars(prompt, prompt_cstr);
+        return env->NewStringUTF("Error: Prompt exceeds context window.");
+    }
+    int max_predict = std::min(512, static_cast<int>(n_ctx) - n_tokens - 1);
 
     // 如果是全新对话，重置状态
     if (g_n_past == 0) {
@@ -241,15 +248,18 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
         g_n_keep = (n_tokens > 32) ? 32 : n_tokens;
     }
 
-    // 记录本轮对话起始位置
-    g_turn_starts.push_back(g_n_past);
-
     // 3. 滑动窗口检测与截断 (如果空间不足)
-    while (g_turn_starts.size() > 1 && g_n_past + n_tokens + max_predict > n_ctx) {
-        int oldest_start = g_turn_starts[1]; // [0] is attention sink / first turn start
-        int oldest_end = (g_turn_starts.size() > 2) ? g_turn_starts[2] : g_n_past;
+    // g_turn_starts only contains completed turns here. The previous code pushed
+    // the current position first, then tried to evict [current, current), so a
+    // full context discarded zero tokens and kept stale answers in the cache.
+    while (g_turn_starts.size() >= 2 && g_n_past + n_tokens + max_predict > n_ctx) {
+        int oldest_start = std::max(g_turn_starts.front(), g_n_keep);
+        int oldest_end = g_turn_starts[1];
         int n_discard = oldest_end - oldest_start;
-        
+
+        if (n_discard <= 0) {
+            break;
+        }
         LOGI("Context full (g_n_past=%d). Discarding oldest turn from pos %d to %d (n_discard=%d)", g_n_past, oldest_start, oldest_end, n_discard);
         
         // 删除旧的 Token
@@ -259,11 +269,26 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
         
         // 更新所有的位置追踪变量
         g_n_past -= n_discard;
-        g_turn_starts.erase(g_turn_starts.begin() + 1);
-        for (size_t i = 1; i < g_turn_starts.size(); ++i) {
-            g_turn_starts[i] -= n_discard;
+        g_turn_starts.erase(g_turn_starts.begin());
+        for (int & turn_start : g_turn_starts) {
+            turn_start -= n_discard;
         }
     }
+
+    // With only one oversized historical turn there is no safe boundary to
+    // evict. Starting fresh is preferable to an out-of-range decode or reusing
+    // stale logits. The current prompt is still ingested below.
+    if (g_n_past + n_tokens + max_predict > static_cast<int>(n_ctx)) {
+        LOGI("Context still full after turn eviction. Resetting KV cache.");
+        llama_memory_clear(llama_get_memory(g_ctx), true);
+        g_n_past = 0;
+        g_n_keep = (n_tokens > 32) ? 32 : n_tokens;
+        g_turn_starts.clear();
+    }
+
+    // Record the current turn only after eviction so it can never be selected
+    // as an already-completed eviction range.
+    g_turn_starts.push_back(g_n_past);
 
     // 4. 将 Prompt 送入推理上下文 (Ingest)
     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
@@ -421,5 +446,200 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     return env->NewStringUTF(response.c_str());
 }
 
+// =========================================================================================
+// EmbeddingEngine JNI Implementation for RAG
+// =========================================================================================
 
+static llama_model *g_embed_model = nullptr;
+static llama_context *g_embed_ctx = nullptr;
+static std::string g_current_embed_model_path = "";
+static std::mutex g_embed_mutex;
 
+extern "C"
+JNIEXPORT void JNICALL
+Java_cn_xxstudy_assistant_engine_EmbeddingEngine_releaseContext(JNIEnv *env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_embed_mutex);
+    if (g_embed_ctx != nullptr) {
+        LOGI("EmbeddingEngine: Releasing llama_context...");
+        llama_free(g_embed_ctx);
+        g_embed_ctx = nullptr;
+    }
+    if (g_embed_model != nullptr) {
+        LOGI("EmbeddingEngine: Releasing llama_model...");
+        llama_model_free(g_embed_model);
+        g_embed_model = nullptr;
+    }
+    g_current_embed_model_path.clear();
+    LOGI("EmbeddingEngine: Context and model completely released.");
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_cn_xxstudy_assistant_engine_EmbeddingEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path) {
+    std::lock_guard<std::mutex> lock(g_embed_mutex);
+
+    const char *path = env->GetStringUTFChars(model_path, nullptr);
+    std::string new_path(path ? path : "");
+    env->ReleaseStringUTFChars(model_path, path);
+
+    if (new_path.empty()) {
+        LOGE("EmbeddingEngine_initContext: Empty model path!");
+        return JNI_FALSE;
+    }
+
+    if (g_embed_model != nullptr && g_embed_ctx != nullptr && g_current_embed_model_path == new_path) {
+        LOGI("EmbeddingEngine: Model already loaded from: %s", new_path.c_str());
+        return JNI_TRUE;
+    }
+
+    if (g_embed_ctx != nullptr) {
+        llama_free(g_embed_ctx);
+        g_embed_ctx = nullptr;
+    }
+    if (g_embed_model != nullptr) {
+        llama_model_free(g_embed_model);
+        g_embed_model = nullptr;
+    }
+    g_current_embed_model_path.clear();
+
+    llama_backend_init();
+
+    LOGI("EmbeddingEngine: Loading embedding model from %s...", new_path.c_str());
+    llama_model_params model_params = llama_model_default_params();
+
+    g_embed_model = llama_model_load_from_file(new_path.c_str(), model_params);
+    if (g_embed_model == nullptr) {
+        LOGE("EmbeddingEngine: Failed to load model from %s!", new_path.c_str());
+        return JNI_FALSE;
+    }
+
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = 512;
+    ctx_params.n_batch = 512;
+    ctx_params.n_threads = 4;
+    ctx_params.n_threads_batch = 4;
+    ctx_params.embeddings = true;
+    // BGE-small-zh-v1.5 is trained with the first [CLS] token as the
+    // sentence representation. Mean pooling changes the embedding space and
+    // materially degrades retrieval quality.
+    ctx_params.pooling_type = LLAMA_POOLING_TYPE_CLS;
+
+    g_embed_ctx = llama_init_from_model(g_embed_model, ctx_params);
+    if (g_embed_ctx == nullptr) {
+        LOGE("EmbeddingEngine: Failed to create embedding context!");
+        llama_model_free(g_embed_model);
+        g_embed_model = nullptr;
+        return JNI_FALSE;
+    }
+
+    g_current_embed_model_path = new_path;
+    LOGI(
+        "EmbeddingEngine: Successfully initialized embedding model (dim=%d, pooling=%d).",
+        llama_model_n_embd(g_embed_model),
+        static_cast<int>(llama_pooling_type(g_embed_ctx))
+    );
+    return JNI_TRUE;
+}
+
+extern "C"
+JNIEXPORT jfloatArray JNICALL
+Java_cn_xxstudy_assistant_engine_EmbeddingEngine_getEmbedding(JNIEnv *env, jobject thiz, jstring text) {
+    std::lock_guard<std::mutex> lock(g_embed_mutex);
+    if (g_embed_model == nullptr || g_embed_ctx == nullptr) {
+        LOGE("EmbeddingEngine_getEmbedding: Model or context not initialized!");
+        return nullptr;
+    }
+
+    const char *text_cstr = env->GetStringUTFChars(text, nullptr);
+    std::string input_text(text_cstr ? text_cstr : "");
+    env->ReleaseStringUTFChars(text, text_cstr);
+
+    if (input_text.empty()) {
+        return nullptr;
+    }
+
+    const llama_vocab *vocab = llama_model_get_vocab(g_embed_model);
+    int max_tokens = 512;
+    std::vector<llama_token> tokens(max_tokens);
+    int n_tokens = llama_tokenize(vocab, input_text.c_str(), input_text.length(), tokens.data(), max_tokens, true, false);
+    if (n_tokens < 0) {
+        tokens.resize(-n_tokens);
+        n_tokens = llama_tokenize(vocab, input_text.c_str(), input_text.length(), tokens.data(), tokens.size(), true, false);
+    }
+    if (n_tokens <= 0) {
+        LOGE("EmbeddingEngine: Tokenization produced 0 tokens");
+        return nullptr;
+    }
+
+    if (n_tokens > 512) {
+        LOGE("EmbeddingEngine: Token count %d exceeded n_ctx (512), truncating.", n_tokens);
+        n_tokens = 512;
+    }
+
+    // 清空上一次的内存缓存
+    llama_memory_clear(llama_get_memory(g_embed_ctx), true);
+
+    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    batch.n_tokens = n_tokens;
+    for (int i = 0; i < n_tokens; i++) {
+        batch.token[i] = tokens[i];
+        batch.pos[i] = i;
+        batch.seq_id[i][0] = 0;
+        batch.n_seq_id[i] = 1;
+        batch.logits[i] = true;
+    }
+
+    if (llama_decode(g_embed_ctx, batch) != 0) {
+        LOGE("EmbeddingEngine: llama_decode failed!");
+        llama_batch_free(batch);
+        return nullptr;
+    }
+
+    const int n_embd = llama_model_n_embd(g_embed_model);
+    float *embd = llama_get_embeddings_seq(g_embed_ctx, 0);
+
+    std::vector<float> final_embd(n_embd, 0.0f);
+    if (embd != nullptr) {
+        for (int i = 0; i < n_embd; i++) {
+            final_embd[i] = embd[i];
+        }
+    } else {
+        // Fallback: 手动 mean pooling
+        int count = 0;
+        for (int t = 0; t < n_tokens; t++) {
+            float *token_embd = llama_get_embeddings_ith(g_embed_ctx, t);
+            if (token_embd != nullptr) {
+                for (int i = 0; i < n_embd; i++) {
+                    final_embd[i] += token_embd[i];
+                }
+                count++;
+            }
+        }
+        if (count > 0) {
+            for (int i = 0; i < n_embd; i++) {
+                final_embd[i] /= count;
+            }
+        }
+    }
+
+    llama_batch_free(batch);
+
+    // L2 归一化 (使得余弦相似度等价于点积)
+    float sum_sq = 0.0f;
+    for (int i = 0; i < n_embd; i++) {
+        sum_sq += final_embd[i] * final_embd[i];
+    }
+    float norm = std::sqrt(sum_sq);
+    if (norm > 1e-6f) {
+        for (int i = 0; i < n_embd; i++) {
+            final_embd[i] /= norm;
+        }
+    }
+
+    jfloatArray result = env->NewFloatArray(n_embd);
+    if (result != nullptr) {
+        env->SetFloatArrayRegion(result, 0, n_embd, final_embd.data());
+    }
+
+    return result;
+}

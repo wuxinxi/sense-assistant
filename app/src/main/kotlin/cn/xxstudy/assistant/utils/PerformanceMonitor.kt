@@ -45,7 +45,9 @@ object PerformanceMonitor {
 
     private fun getCpuUsage(): Int {
         try {
-            val reader = BufferedReader(FileReader("/proc/stat"))
+            val statFile = java.io.File("/proc/stat")
+            if (!statFile.canRead()) return 0
+            val reader = BufferedReader(FileReader(statFile))
             val line = reader.readLine()
             reader.close()
             
@@ -72,8 +74,8 @@ object PerformanceMonitor {
                     lastIdleTime = idle
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (ignored: Exception) {
+            // Android 8.0+ (API 26+) 限制普通应用访问 /proc/stat，静默捕获避免日志刷屏
         }
         return 0
     }

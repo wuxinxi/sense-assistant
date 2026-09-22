@@ -1,0 +1,30 @@
+package cn.xxstudy.assistant.rag
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class RagQueryNormalizerTest {
+    @Test
+    fun removesKnowledgeBaseCommandWordsFromNamedTopicQuery() {
+        assertEquals("Fluro", RagQueryNormalizer.normalize("通过知识库查询 Fluro"))
+        assertEquals("Fluro", RagQueryNormalizer.normalize("请帮我从本地知识库中查找：Fluro"))
+    }
+
+    @Test
+    fun keepsTheActualQuestionIntact() {
+        assertEquals(
+            "Android Compose 状态管理",
+            RagQueryNormalizer.normalize("在知识库里搜索 Android Compose 状态管理")
+        )
+        assertEquals("怎么配置 Fluro 路由？", RagQueryNormalizer.normalize("怎么配置 Fluro 路由？"))
+    }
+
+    @Test
+    fun identifiesExplicitKnowledgeBaseLookups() {
+        assertTrue(RagQueryNormalizer.isExplicitKnowledgeLookup("通过知识库查询 Fluro"))
+        assertTrue(RagQueryNormalizer.isExplicitKnowledgeLookup("在知识库里搜索 Compose"))
+        assertFalse(RagQueryNormalizer.isExplicitKnowledgeLookup("怎么配置 Fluro 路由？"))
+    }
+}

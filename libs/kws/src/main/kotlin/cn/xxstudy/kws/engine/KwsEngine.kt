@@ -24,6 +24,21 @@ class KwsEngine(
          * （基于 WenetSpeech Zipformer 3.3M 建模单元，tokens.txt 为音素表）
          */
         val PRESET_KEYWORDS = mapOf(
+            "艾诗" to listOf(
+                "ài sh ī @艾诗",
+                "ài s ī @艾诗",                // 平翘舌容错 (SH -> S)
+                "ài x ī @艾诗",                // 尖音/方言容错 (SH -> X)
+                "ài sh i @艾诗",               // 轻声容错
+                "n ǐ h ǎo ài sh ī @艾诗",       // 连调：“你好艾诗”
+                "n ǐ h ǎo ài s ī @艾诗",        // 连调平翘舌容错
+                "x iǎo ài sh ī @艾诗",         // “小艾诗”
+                "ài sh ī ài sh ī @艾诗"         // “艾诗艾诗”双呼
+            ),
+            "你好艾诗" to listOf(
+                "n ǐ h ǎo ài sh ī @你好艾诗",
+                "n ǐ h ǎo ài s ī @你好艾诗",
+                "ài sh ī @你好艾诗"
+            ),
             "小乐助" to listOf(
                 "x iǎo l è zh ù @小乐助",
                 "x iǎo y uè zh ù @小乐助",
@@ -64,7 +79,7 @@ class KwsEngine(
 
         try {
             Log.d(TAG, "🔍 正在检索 Sherpa-ONNX KWS 离线模型...")
-            val modelLocation = locateModelFiles()
+            val modelLocation = locateModelFiles(keyword)
             if (modelLocation == null) {
                 Log.w(TAG, "⚠️ 未检测到可用的 KWS 唤醒模型，请确保将模型放入 models/kws 目录或 assets/kws")
                 isReady = false
@@ -183,7 +198,7 @@ class KwsEngine(
         val keywordsFile: String = ""
     )
 
-    private fun locateModelFiles(): ModelLocation? {
+    private fun locateModelFiles(keyword: String): ModelLocation? {
         // 1. 优先探测外置存储与私有目录
         val pkg = context.packageName
         val candidates = mutableListOf<File>()
@@ -235,7 +250,7 @@ class KwsEngine(
                         decoder = decoder.absolutePath,
                         joiner = joiner.absolutePath,
                         tokens = tokensFile.absolutePath,
-                        keywordsFile = ensureKeywordsFile(dir, config.defaultKeyword).absolutePath
+                        keywordsFile = ensureKeywordsFile(dir, keyword, tokensFile).absolutePath
                     )
                 }
             }
@@ -248,7 +263,7 @@ class KwsEngine(
                     baseDir = dir,
                     singleModel = singleModel.absolutePath,
                     tokens = tokensFile.absolutePath,
-                    keywordsFile = ensureKeywordsFile(dir, config.defaultKeyword).absolutePath
+                    keywordsFile = ensureKeywordsFile(dir, keyword, tokensFile).absolutePath
                 )
             }
         }
@@ -261,7 +276,7 @@ class KwsEngine(
                 val decoder = assetFiles.firstOrNull { it.contains("decoder") && it.endsWith(".onnx") }
                 val joiner = assetFiles.firstOrNull { it.contains("joiner") && it.endsWith(".onnx") }
                 if (encoder != null && decoder != null && joiner != null) {
-                    val kwFile = ensureKeywordsFile(context.filesDir, config.defaultKeyword)
+                    val kwFile = ensureKeywordsFile(context.filesDir, keyword, null)
                     return ModelLocation(
                         isFromAsset = true,
                         encoder = "kws/$encoder",
@@ -277,10 +292,10 @@ class KwsEngine(
         return null
     }
 
-    private fun ensureKeywordsFile(targetDir: File, keyword: String): File {
+    private fun ensureKeywordsFile(targetDir: File, keyword: String, tokensFile: File? = null): File {
         val dirKwFile = File(targetDir, "keywords.txt")
         val internalKwFile = File(context.filesDir, "kws_keywords.txt")
-        val generatedContent = buildKeywordsContent(keyword)
+        val generatedContent = buildKeywordsContent(keyword, tokensFile)
 
         var resolvedFile: File? = null
         try {
@@ -314,23 +329,62 @@ class KwsEngine(
         return dirKwFile
     }
 
-    private fun buildKeywordsContent(keyword: String): String {
+    private fun buildKeywordsContent(keyword: String, tokensFile: File? = null): String {
+        val trimmed = keyword.trim()
         val lines = mutableListOf<String>()
 
         // 1. 如果请求的唤醒词在预设列表中，加入其所有拼音变体（含容错发音）
-        if (PRESET_KEYWORDS.containsKey(keyword)) {
-            PRESET_KEYWORDS[keyword]?.let { lines.addAll(it) }
+        if (PRESET_KEYWORDS.containsKey(trimmed)) {
+            PRESET_KEYWORDS[trimmed]?.let { lines.addAll(it) }
+        } else if (trimmed.contains("@") && trimmed.contains(" ")) {
+            // 2. 如果是显式提供了声韵母音素切分的自定义规则，如 "x iǎo ài @小爱"
+            lines.add(trimmed)
         } else {
-            // 2. 如果是自定义的非预设唤醒词
-            if (keyword.contains("@") || keyword.contains(" ")) {
-                lines.add(keyword)
-            } else {
-                Log.w(TAG, "未知的唤醒词或未提供拼音，尝试使用纯文本: $keyword")
-                lines.add("$keyword @$keyword")
-            }
+            // 3. 未知唤醒词且未提供合法音素：严禁直接将未经分词的汉字写入 keywords.txt，防止 Sherpa-ONNX abort 崩溃！
+            Log.w(TAG, "⚠️ 唤醒词 [$trimmed] 未在预设音素库中，且未提供音素切分。为防止底层 C++ abort 崩溃，自动安全降级至默认唤醒词 [艾诗]")
+            PRESET_KEYWORDS["艾诗"]?.let { lines.addAll(it) }
+                ?: PRESET_KEYWORDS["小乐助"]?.let { lines.addAll(it) }
+                ?: lines.add("ài sh ī @艾诗")
         }
 
-        return lines.joinToString("\n") + "\n"
+        // 4. 基于 tokens.txt 进行防呆合法性校验，剔除无法被模型分词的非法音素
+        val validLines = if (tokensFile != null && tokensFile.exists() && tokensFile.canRead()) {
+            val validTokens = try {
+                tokensFile.readLines()
+                    .map { it.split("\\s+".toRegex()).firstOrNull() ?: "" }
+                    .filter { it.isNotBlank() }
+                    .toSet()
+            } catch (e: Exception) {
+                Log.w(TAG, "读取 tokens.txt 失败: ${e.message}")
+                emptySet()
+            }
+
+            if (validTokens.isNotEmpty()) {
+                lines.filter { line ->
+                    val phonemePart = line.substringBefore("@").trim()
+                    val tokens = phonemePart.split("\\s+".toRegex()).filter { it.isNotBlank() }
+                    val allValid = tokens.all { validTokens.contains(it) }
+                    if (!allValid) {
+                        val invalid = tokens.filter { !validTokens.contains(it) }
+                        Log.e(TAG, "❌ 唤醒规则 [$line] 包含 tokens.txt 不支持的音素: $invalid，已自动剔除")
+                    }
+                    allValid
+                }
+            } else {
+                lines
+            }
+        } else {
+            lines
+        }
+
+        val finalLines = if (validLines.isEmpty()) {
+            Log.e(TAG, "❌ 所有唤醒规则均无效，紧急写入最小安全规则: ài sh ī @艾诗")
+            listOf("ài sh ī @艾诗")
+        } else {
+            validLines
+        }
+
+        return finalLines.joinToString("\n") + "\n"
     }
 
 

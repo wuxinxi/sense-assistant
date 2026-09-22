@@ -12,7 +12,7 @@ package cn.xxstudy.kws
  * @param enableDingSound 是否在检测到唤醒词时瞬间通过 SoundPool 播放“滴”提示音
  */
 data class KwsConfig(
-    val defaultKeyword: String = "小乐助",
+    val defaultKeyword: String = "艾诗",
     val threshold: Float = 0.30f,
     val score: Float = 1.2f,
     val numThreads: Int = 1,

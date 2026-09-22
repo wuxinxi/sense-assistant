@@ -80,6 +80,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     testImplementation(libs.junit)
     implementation(libs.androidx.compose.material.iconsExtended)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
@@ -95,4 +96,7 @@ dependencies {
     // Markdown parser
     implementation("com.halilibo.compose-richtext:richtext-commonmark:0.17.0")
     implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.17.0")
+
+    // DocumentFile for SAF (Storage Access Framework)
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }

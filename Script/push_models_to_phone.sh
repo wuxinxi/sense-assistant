@@ -164,14 +164,45 @@ push_tts_model "matcha-icefall-zh-baker" "Matcha-TTS 极速纯净中文语音合
 push_tts_model "kokoro-multi-lang-v1_1" "Kokoro-82M 拟真人声中英语音合成模型"
 push_tts_model "vits-melo-tts-zh_en" "VITS MeloTTS 中英双语语音合成模型"
 
-# 7. 推送 LLM 大语言模型权重
+# 7. 推送 RAG 知识库向量嵌入模型 (BGE-Small GGUF)
+BGE_MODEL_FILE="$(find "$PROJECT_ROOT" -maxdepth 2 -name "bge-small-zh-v1.5-q8_0.gguf" -o -name "bge-small*.gguf" | head -n 1)"
+if [ -n "$BGE_MODEL_FILE" ] && [ -f "$BGE_MODEL_FILE" ]; then
+    BGE_FILE_NAME="$(basename "$BGE_MODEL_FILE")"
+    if ask_push "RAG 向量嵌入模型 $BGE_FILE_NAME (Obsidian 知识库)"; then
+        LOCAL_SIZE=$(get_local_file_size "$BGE_MODEL_FILE")
+        REMOTE_FILE="/sdcard/Android/data/${PACKAGE_NAME}/files/${BGE_FILE_NAME}"
+        REMOTE_SIZE=$(get_remote_file_size "$REMOTE_FILE")
+
+        LOCAL_MB=$((LOCAL_SIZE / 1024 / 1024))
+        REMOTE_MB=$((REMOTE_SIZE / 1024 / 1024))
+
+        if [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ] && [ "$LOCAL_SIZE" -gt 0 ]; then
+            echo "⚡ 远端已存在完整向量模型 $BGE_FILE_NAME (${REMOTE_MB}MB / ${LOCAL_SIZE} 字节)，大小一致，跳过推送。"
+        else
+            if [ "$REMOTE_SIZE" -gt 0 ]; then
+                echo "🔄 远端模型 $BGE_FILE_NAME 不完整 (远端: ${REMOTE_MB}MB, 本地: ${LOCAL_MB}MB)，开始重新推送..."
+            else
+                echo "🚀 正在推送 RAG 向量模型: $BGE_FILE_NAME (${LOCAL_MB}MB) 到手机..."
+            fi
+            adb push "$BGE_MODEL_FILE" "/sdcard/Android/data/${PACKAGE_NAME}/files/"
+            echo "✅ 向量模型 $BGE_FILE_NAME 推送完成！"
+        fi
+    fi
+else
+    echo "⚠️ 未在本地检测到 BGE-Small 向量模型。若需使用端侧 Obsidian RAG 知识库，请先运行: python3 Script/download_models.py"
+fi
+
+# 8. 推送 LLM 大语言模型权重
 GGUF_FILES=()
 while IFS= read -r file; do
-    [ -n "$file" ] && GGUF_FILES+=("$file")
+    # 排除已经由上方专用逻辑处理的 BGE 向量模型
+    if [[ "$file" != *"bge-small"* ]]; then
+        [ -n "$file" ] && GGUF_FILES+=("$file")
+    fi
 done < <(find "$PROJECT_ROOT" -maxdepth 2 -name "*.gguf")
 
 if [ ${#GGUF_FILES[@]} -eq 0 ]; then
-    echo "⚠️ 未在本地检测到任何 .gguf 模型文件。"
+    echo "⚠️ 未在本地检测到任何大语言模型 (.gguf) 文件。"
 else
     for GGUF_FILE in "${GGUF_FILES[@]}"; do
         if [ -f "$GGUF_FILE" ]; then
@@ -200,7 +231,7 @@ else
     done
 fi
 
-# 8. 关键：修复 Android Linux 权限，确保 App 独立 UID 进程拥有完整读取和进入权限
+# 9. 关键：修复 Android Linux 权限，确保 App 独立 UID 进程拥有完整读取和进入权限
 echo "🛡️ 正在授予应用私有沙盒完整读写权限..."
 adb shell "chmod -R 777 /sdcard/Android/data/${PACKAGE_NAME}/files/ 2>/dev/null || true"
 
