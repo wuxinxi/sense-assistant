@@ -27,4 +27,14 @@ class RagQueryNormalizerTest {
         assertTrue(RagQueryNormalizer.isExplicitKnowledgeLookup("在知识库里搜索 Compose"))
         assertFalse(RagQueryNormalizer.isExplicitKnowledgeLookup("怎么配置 Fluro 路由？"))
     }
+
+    @Test
+    fun identifiesKnowledgeBaseStatusQuestionsWithoutTreatingTopicQueriesAsStatus() {
+        assertTrue(RagQueryNormalizer.isKnowledgeBaseStatusQuery("你了解我的知识库吗"))
+        assertTrue(RagQueryNormalizer.isKnowledgeBaseStatusQuery("我的知识库里有什么？"))
+        assertTrue(RagQueryNormalizer.isKnowledgeBaseStatusQuery("知识库同步了吗？"))
+
+        assertFalse(RagQueryNormalizer.isKnowledgeBaseStatusQuery("知识库里 Fluro 怎么配置？"))
+        assertFalse(RagQueryNormalizer.isKnowledgeBaseStatusQuery("通过知识库查询 Compose"))
+    }
 }

@@ -1388,7 +1388,7 @@ fun SettingsScreen(
                                 steps = 39
                             )
                             Text(
-                                text = "误召回较多时提高；经常找不到相关笔记时降低。默认 0.62。",
+                                text = "误召回较多时提高；经常找不到相关笔记时降低。默认 0.60。",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

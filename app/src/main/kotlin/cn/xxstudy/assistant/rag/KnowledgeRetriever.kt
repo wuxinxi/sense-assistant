@@ -114,20 +114,38 @@ class KnowledgeRetriever(private val context: Context) {
         // 归一化向量下点积即为余弦相似度。维度不一致意味着索引来自
         // 其他模型或旧版本，不能静默使用部分向量。
         var dimensionMismatchCount = 0
+        data class ScoredChunk(
+            val chunk: StoredChunk,
+            val denseScore: Float,
+            val lexicalBonus: Float
+        )
+
+        val lexicalQuery = RagHybridRanker.prepare(query)
         val scoredChunks = allChunks.mapNotNull { chunk ->
             if (chunk.embedding.size != queryEmbedding.size) {
                 dimensionMismatchCount++
                 null
             } else {
-                chunk to dotProduct(queryEmbedding, chunk.embedding)
+                ScoredChunk(
+                    chunk = chunk,
+                    denseScore = dotProduct(queryEmbedding, chunk.embedding),
+                    lexicalBonus = RagHybridRanker.lexicalBonus(
+                        query = lexicalQuery,
+                        docName = chunk.docName,
+                        sectionTitle = chunk.sectionTitle,
+                        content = chunk.content
+                    )
+                )
             }
         }
         if (dimensionMismatchCount > 0) {
             Log.w(TAG, "Ignored $dimensionMismatchCount chunks with incompatible embedding dimensions")
         }
 
-        val ranked = scoredChunks.sortedByDescending { it.second }
-        val bestScore = ranked.firstOrNull()?.second
+        val ranked = scoredChunks.sortedByDescending {
+            RagHybridRanker.combinedScore(it.denseScore, it.lexicalBonus)
+        }
+        val bestScore = scoredChunks.maxOfOrNull { it.denseScore }
         val adaptiveThreshold = if (bestScore == null) {
             threshold
         } else {
@@ -137,18 +155,29 @@ class KnowledgeRetriever(private val context: Context) {
 
         val safeTopK = topK.coerceIn(1, 8)
         val perDocumentCount = mutableMapOf<String, Int>()
+        var lexicalOverrideCount = 0
         val matches = buildList {
-            for ((chunk, score) in ranked) {
-                if (score < adaptiveThreshold || size >= safeTopK) break
+            for (candidate in ranked) {
+                if (size >= safeTopK) break
+                if (!RagHybridRanker.shouldInclude(
+                        denseScore = candidate.denseScore,
+                        denseThreshold = adaptiveThreshold,
+                        lexicalBonus = candidate.lexicalBonus
+                    )
+                ) {
+                    continue
+                }
+                val chunk = candidate.chunk
                 val count = perDocumentCount[chunk.docName] ?: 0
                 if (count >= 2) continue
                 perDocumentCount[chunk.docName] = count + 1
+                if (candidate.denseScore < adaptiveThreshold) lexicalOverrideCount++
                 add(
                     KnowledgeMatch(
                         docName = chunk.docName,
                         sectionTitle = chunk.sectionTitle,
                         content = chunk.content,
-                        score = score
+                        score = candidate.denseScore
                     )
                 )
             }
@@ -159,7 +188,7 @@ class KnowledgeRetriever(private val context: Context) {
             TAG,
             "RAG Retrieval done: totalChunks=${allChunks.size}, hits=${matches.size}, " +
                 "bestScore=${bestScore ?: "n/a"}, threshold=$adaptiveThreshold, " +
-                "embedTime=${tEmbed}ms, searchTime=${tSearch}ms"
+                "lexicalOverrides=$lexicalOverrideCount, embedTime=${tEmbed}ms, searchTime=${tSearch}ms"
         )
         return matches
     }

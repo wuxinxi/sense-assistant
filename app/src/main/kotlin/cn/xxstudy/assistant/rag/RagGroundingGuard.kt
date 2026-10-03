@@ -17,15 +17,24 @@ object RagGroundingGuard {
 
     internal fun isGrounded(generated: String, matches: List<KnowledgeMatch>): Boolean {
         val normalizedAnswer = generated.lowercase()
-        // 端侧小模型很难精确逐字引用笔记原文。只要模型生成了足够长度的回答
-        // （而不是拒绝/空泛的"请查看文档"），就认为它消化了参考资料。
-        // 如果回答过短（<80字符）或者是典型的拒绝模板，才走 extractive fallback。
         val refusalPatterns = listOf(
             "知识库资料不足", "无法回答", "没有相关", "请查看", "请参考官方",
-            "无法提供", "不在知识库", "没有找到相关"
+            "无法提供", "不在知识库", "没有找到相关", "无法访问"
         )
         if (refusalPatterns.any { normalizedAnswer.contains(it) }) return false
-        return normalizedAnswer.length >= 80
+
+        val citesSource = matches.any { match ->
+            val fullName = match.docName.lowercase()
+            val baseName = match.docName.substringBeforeLast('.').lowercase()
+            normalizedAnswer.contains(fullName) ||
+                (baseName.length >= 2 && normalizedAnswer.contains(baseName))
+        }
+        if (!citesSource) return false
+
+        // 答案还必须包含至少一个可从原文核对的片段，仅提到笔记名不算 grounded。
+        return matches.asSequence()
+            .flatMap { sourceAnchors(it).asSequence() }
+            .any(normalizedAnswer::contains)
     }
 
     internal fun buildExtractiveFallback(

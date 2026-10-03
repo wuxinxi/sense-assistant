@@ -328,6 +328,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         _chatMessages.value = _chatMessages.value + listOf(userMsg, thinkingMsg)
 
+        // “你了解我的知识库吗”没有可供向量检索的主题。直接用本地索引状态回答，
+        // 避免检索 0 命中后让小模型猜测，进而错误声称“无法访问本地知识库”。
+        if (cn.xxstudy.assistant.rag.RagQueryNormalizer.isKnowledgeBaseStatusQuery(trimmed)) {
+            val statusAnswer = cn.xxstudy.assistant.rag.RagStatusResponse.build(
+                enabled = AppSettings.isObsidianRagEnabled.value,
+                vaultName = AppSettings.obsidianVaultName.value,
+                docCount = AppSettings.ragDocCount.value,
+                chunkCount = AppSettings.ragChunkCount.value
+            )
+            _chatMessages.value = _chatMessages.value.map { message ->
+                if (message.id == thinkingId) {
+                    message.copy(
+                        text = statusAnswer,
+                        isThinking = false,
+                        isThinkingActive = false,
+                        metrics = "知识库状态",
+                        isStreaming = false
+                    )
+                } else {
+                    message
+                }
+            }
+            currentThinkingId = null
+            if (AppSettings.ttsAutoPlay.value) {
+                speakMessage(thinkingId, statusAnswer)
+            }
+            return
+        }
+
         // 如果是全双工电话模式，在发送消息后立即再次开启录音，实现随时打断
         if (_isActiveCall.value) startPhoneMode()
 
@@ -345,11 +374,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var ragMatches: List<cn.xxstudy.assistant.rag.KnowledgeMatch> = emptyList()
             val isExplicitRagLookup = cn.xxstudy.assistant.rag.RagQueryNormalizer
                 .isExplicitKnowledgeLookup(prompt)
+            val ragQuery = cn.xxstudy.assistant.rag.RagQueryNormalizer.normalize(prompt)
             if (AppSettings.isObsidianRagEnabled.value) {
                 try {
                     val matches = kotlinx.coroutines.withContext(Dispatchers.IO) {
                         // 默认只检索当前问题，避免切换话题时被上一轮内容污染。
-                        val ragQuery = cn.xxstudy.assistant.rag.RagQueryNormalizer.normalize(prompt)
                         android.util.Log.d(
                             "MainViewModel",
                             "RAG query prepared: inputChars=${prompt.trim().length}, searchChars=${ragQuery.length}"
@@ -371,6 +400,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (e: Exception) {
                     android.util.Log.e("MainViewModel", "RAG retrieval error", e)
                 }
+            }
+
+            val disableThinkingForRequest = cn.xxstudy.assistant.rag.RagGenerationPolicy
+                .shouldDisableThinking(
+                    userEnabledThinking = enableThinking,
+                    modelSupportsThinking = currentModel.supportsThinking,
+                    hasKnowledgeMatches = ragMatches.isNotEmpty()
+                )
+
+            // 显式要求查询知识库时，0 命中也必须由 RAG 链路给出可诊断的结果。
+            // 不再回落给大模型，否则它无法区分“未连接”和“阈值过高”。
+            if (isExplicitRagLookup && ragMatches.isEmpty()) {
+                val noMatchAnswer = cn.xxstudy.assistant.rag.RagStatusResponse.noReliableMatch(
+                    query = ragQuery,
+                    docCount = AppSettings.ragDocCount.value,
+                    threshold = AppSettings.ragScoreThreshold.value
+                )
+                _chatMessages.value = _chatMessages.value.map { message ->
+                    if (message.id == thinkingId) {
+                        message.copy(
+                            text = noMatchAnswer,
+                            isThinking = false,
+                            isThinkingActive = false,
+                            metrics = "知识库未命中",
+                            isStreaming = false
+                        )
+                    } else {
+                        message
+                    }
+                }
+                if (currentThinkingId == thinkingId) {
+                    currentThinkingId = null
+                }
+                if (AppSettings.ttsAutoPlay.value) {
+                    speakMessage(thinkingId, noMatchAnswer)
+                }
+                return@launch
             }
 
             // “通过知识库查询 X”表达的是查阅原文，而不是让小模型二次改写。
@@ -408,7 +474,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (isFirstTurn || ragMatches.isNotEmpty()) {
                 val sysText = AppSettings.getEffectiveSystemPrompt(currentModel)
                 finalPrompt += "<|im_start|>system\n$sysText"
-                if (!enableThinking && currentModel.supportsThinking) {
+                if (disableThinkingForRequest) {
                     finalPrompt += "\n请直接给出最终回答，无需输出思考过程。"
                 }
                 finalPrompt += "<|im_end|>\n"
@@ -420,7 +486,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 finalPrompt += "<|im_start|>user\n${prompt}<|im_end|>\n<|im_start|>assistant\n"
             }
             
-            if (!enableThinking && currentModel.supportsThinking) {
+            if (disableThinkingForRequest) {
                 finalPrompt = "<|system_cmd_disable_thinking|>" + finalPrompt
             }
 
@@ -500,14 +566,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 parser.finish()
                 val finalSnapshot = parser.getSnapshot()
 
-                val actualText = finalSnapshot.answerText.ifBlank {
-                    if (finalSnapshot.thinkingText != null && !finalSnapshot.isThinkingActive) {
-                        // 如果仅有思考无正文
-                        ""
-                    } else {
-                        "（回复为空）"
-                    }
-                }
+                val actualText = cn.xxstudy.assistant.engine.GenerationOutputResolver.resolve(
+                    answerText = finalSnapshot.answerText,
+                    thinkingText = finalSnapshot.thinkingText
+                )
 
                 var groundedText = cn.xxstudy.assistant.rag.RagGroundingGuard.ensureGrounded(
                     generated = actualText,
