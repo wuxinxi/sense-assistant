@@ -23,19 +23,51 @@ object RagGroundingGuard {
         )
         if (refusalPatterns.any { normalizedAnswer.contains(it) }) return false
 
-        val citesSource = matches.any { match ->
+        val numberedCitations = Regex("\\[(\\d+)]").findAll(generated).map { it.groupValues[1].toIntOrNull() ?: 0 }.toList()
+        if (numberedCitations.any { it !in 1..matches.size }) return false
+        if (numberedCitations.isNotEmpty()) {
+            // Bind each answer point to its own references, not the union of
+            // every cited document (which would accept swapped citations).
+            val points = generated.split(Regex("\\n\\s*\\n|\\n(?=\\s*(?:[-*•]|\\d+[.)、])\\s*)"))
+                .map(String::trim).filter(String::isNotEmpty)
+            return points.all { point ->
+                val refs = Regex("\\[(\\d+)]").findAll(point).map { it.groupValues[1].toInt() }.distinct().toList()
+                if (refs.isEmpty()) {
+                    // A short Markdown heading is presentation, not a claim.
+                    point.startsWith('#') && !point.contains('\n') && point.length <= 40
+                } else hasSupportedFact(point, refs.map { matches[it - 1] })
+            }
+        }
+        val citedMatches = matches.filter { match ->
             val fullName = match.docName.lowercase()
             val baseName = match.docName.substringBeforeLast('.').lowercase()
             normalizedAnswer.contains(fullName) ||
                 (baseName.length >= 2 && normalizedAnswer.contains(baseName))
         }
-        if (!citesSource) return false
+        if (citedMatches.isEmpty()) return false
+
+        return hasSupportedFact(generated, citedMatches)
+    }
+
+    private fun hasSupportedFact(generated: String, citedMatches: List<KnowledgeMatch>): Boolean {
+        val normalizedAnswer = generated.lowercase()
+        val sourceText = citedMatches.joinToString("\n") { "${it.docName}\n${it.content}".lowercase() }
+        // Conservative syntax checks, not semantic entailment: a real anchor
+        // must not make an invented dependency/API elsewhere look grounded.
+        val inlineCode = Regex("`([^`\\n]+)`").findAll(generated).map { it.groupValues[1].lowercase() }
+        if (inlineCode.any { !sourceText.contains(it) }) return false
+        val identifiers = Regex("\\b(?:[a-zA-Z][a-zA-Z0-9]*_[a-zA-Z0-9_]+|[A-Z][A-Za-z0-9]*\\.[A-Za-z_]\\w*|\\d+(?:\\.\\d+){1,3})\\b")
+            .findAll(generated).map { it.value.lowercase() }
+        if (identifiers.any { !sourceText.contains(it) }) return false
 
         // 答案还必须包含至少一个可从原文核对的片段，仅提到笔记名不算 grounded。
-        return matches.asSequence()
+        return citedMatches.asSequence()
             .flatMap { sourceAnchors(it).asSequence() }
             .any(normalizedAnswer::contains)
     }
+
+    internal fun sourceText(matches: List<KnowledgeMatch>): String =
+        mergeOverlappingChunks(matches.map { cleanExcerpt(it.content) })
 
     internal fun buildExtractiveFallback(
         matches: List<KnowledgeMatch>,

@@ -412,7 +412,7 @@ private fun PerformanceBadge(metrics: DeviceMetrics, modifier: Modifier = Modifi
                 )
                 Spacer(modifier = Modifier.width(5.dp))
                 Text(
-                    text = "CPU 占用: ${metrics.cpuPercent}%",
+                    text = "应用 CPU: ${metrics.cpuPercent}%",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = contentColor

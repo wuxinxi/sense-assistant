@@ -96,6 +96,8 @@ dependencies {
     // Markdown parser
     implementation("com.halilibo.compose-richtext:richtext-commonmark:0.17.0")
     implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.17.0")
+    // Match richtext's parser version; direct use protects code/link spans and copies raw blocks.
+    implementation("org.commonmark:commonmark:0.21.0")
 
     // DocumentFile for SAF (Storage Access Framework)
     implementation("androidx.documentfile:documentfile:1.0.1")

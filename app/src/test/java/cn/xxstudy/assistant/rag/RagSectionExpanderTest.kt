@@ -6,6 +6,16 @@ import org.junit.Test
 
 class RagSectionExpanderTest {
     @Test
+    fun doesNotMergeDifferentFilesWithTheSameNameAndHeading() {
+        val chunks = listOf(
+            RagSectionChunk(1, 1, "Hive.md", "使用", "正确资料"),
+            RagSectionChunk(2, 2, "Hive.md", "使用", "另一目录中的同名笔记")
+        )
+        val seed = KnowledgeMatch("Hive.md", "使用", "正确资料", .9f, docId = 1)
+        assertEquals(listOf(1L), RagSectionExpander.expand(listOf(seed), chunks, 1000).map { it.id })
+    }
+
+    @Test
     fun fillsTheRestOfASectionAfterASeedChunkMatches() {
         val allChunks = listOf(
             RagSectionChunk(10, 1, "Fluro.md", "依赖", "fluro: ^2.0.3"),

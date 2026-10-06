@@ -91,6 +91,7 @@ object AppSettings {
     private const val KEY_THEME_MODE = "key_theme_mode"
     private const val KEY_COLOR_THEME = "key_color_theme"
     private const val KEY_CONTEXT_SIZE = "key_context_size"
+    private const val KEY_GPU_INFERENCE_ENABLED = "key_gpu_inference_enabled"
     private const val KEY_SYSTEM_PROMPT = "key_system_prompt"
     private const val KEY_CURRENT_MODEL = "key_current_model"
     private const val KEY_ENABLE_THINKING = "key_enable_thinking"
@@ -135,6 +136,10 @@ object AppSettings {
 
     private val _contextSize = MutableStateFlow(2048)
     val contextSize: StateFlow<Int> = _contextSize.asStateFlow()
+
+    // Opt-in: GPU availability does not imply faster decoding on every phone.
+    private val _gpuInferenceEnabled = MutableStateFlow(false)
+    val gpuInferenceEnabled: StateFlow<Boolean> = _gpuInferenceEnabled.asStateFlow()
 
     private val _systemPrompt = MutableStateFlow(SYSTEM_PROMPT)
     val systemPrompt: StateFlow<String> = _systemPrompt.asStateFlow()
@@ -235,6 +240,7 @@ object AppSettings {
         _colorTheme.value = runCatching { ColorTheme.valueOf(savedColorTheme ?: ColorTheme.PURPLE.name) }.getOrDefault(ColorTheme.PURPLE)
 
         _contextSize.value = prefs.getInt(KEY_CONTEXT_SIZE, 2048)
+        _gpuInferenceEnabled.value = prefs.getBoolean(KEY_GPU_INFERENCE_ENABLED, false)
         _systemPrompt.value = prefs.getString(KEY_SYSTEM_PROMPT, SYSTEM_PROMPT) ?: SYSTEM_PROMPT
 
         val savedModelType = prefs.getString(KEY_CURRENT_MODEL, ModelType.MINICPM5_2B.name)
@@ -341,6 +347,11 @@ object AppSettings {
     fun setContextSize(size: Int) {
         _contextSize.value = size
         if (::prefs.isInitialized) prefs.edit().putInt(KEY_CONTEXT_SIZE, size).apply()
+    }
+
+    fun setGpuInferenceEnabled(enabled: Boolean) {
+        _gpuInferenceEnabled.value = enabled
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_GPU_INFERENCE_ENABLED, enabled).apply()
     }
 
     fun setSystemPrompt(prompt: String) {

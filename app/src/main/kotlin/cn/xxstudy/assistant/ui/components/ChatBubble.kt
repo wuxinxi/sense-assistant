@@ -2,6 +2,8 @@ package cn.xxstudy.assistant.ui.components
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipDescription
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -13,7 +15,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -24,17 +29,30 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 import cn.xxstudy.assistant.viewmodel.ChatMessage
+import cn.xxstudy.assistant.rag.RagCitationLinks
+import cn.xxstudy.assistant.rag.RagSource
+import cn.xxstudy.assistant.rag.RagSourceReader
 import com.halilibo.richtext.markdown.Markdown
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatBubble(
@@ -45,6 +63,9 @@ fun ChatBubble(
 ) {
     val isUser = msg.isUser
     val context = LocalContext.current
+    var selectedSourceIndex by remember(msg.id) { mutableStateOf<Int?>(null) }
+    val canSpeak = onSpeakClick != null && msg.text.isNotBlank() && !msg.isKnowledgeExcerpt &&
+        (msg.knowledgeSources.isEmpty() || (!msg.isStreaming && msg.knowledgeStage == null))
     val renderAsPlainText = msg.isStreaming ||
         (msg.isKnowledgeExcerpt && msg.text.length > 16_000)
     Row(
@@ -70,11 +91,15 @@ fun ChatBubble(
         }
 
         val displayText = if (!msg.thinkingText.isNullOrBlank()) msg.text.trimStart() else msg.text
-        val parsedActions = if (!isUser && !msg.isKnowledgeExcerpt && displayText.isNotBlank()) {
+        val markdownDisplayText = if (!isUser && !msg.isStreaming && msg.knowledgeSources.isNotEmpty()) {
+            remember(displayText, msg.knowledgeSources) { RagCitationLinks.linkify(displayText, msg.knowledgeSources) }
+        } else displayText
+        val isKnowledgeAnswer = msg.isKnowledgeExcerpt || msg.knowledgeSources.isNotEmpty()
+        val parsedActions = if (!isUser && !isKnowledgeAnswer && displayText.isNotBlank()) {
             IntentParser.parse(displayText)
         } else null
         val trimmed = displayText.trim()
-        val isPotentialJson = !isUser && !msg.isKnowledgeExcerpt && (
+        val isPotentialJson = !isUser && !isKnowledgeAnswer && (
             trimmed.startsWith("[") || 
             trimmed.startsWith("{") || 
             trimmed.startsWith("```json") || 
@@ -102,13 +127,24 @@ fun ChatBubble(
             Box(modifier = Modifier.padding(if (parsedActions != null) 6.dp else 12.dp)) {
                 if (msg.isThinking && msg.thinkingText.isNullOrBlank()) {
                     // 初始冷启动等待态（尚未返回任何 Token 或开始标记）
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("思考中...", fontSize = 14.sp)
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(msg.knowledgeStage?.label ?: "思考中...", fontSize = 14.sp)
+                        }
+                        // Retrieved sources are already usable while waiting for the first token.
+                        if (msg.knowledgeSources.isNotEmpty()) {
+                            KnowledgeSourceCard(msg, onOpenSource = { selectedSourceIndex = it })
+                        } else if (msg.knowledgeRetrievalInfo != null) {
+                            Text(msg.knowledgeRetrievalInfo, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 } else {
                     Column {
+                        if (msg.knowledgeStage != null && !msg.isThinking) {
+                            Text(msg.knowledgeStage.label, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        }
                         // 1. 如果存在思考链文本，优先渲染极客折叠卡片
                         if (!msg.thinkingText.isNullOrBlank()) {
                             ThinkingCard(
@@ -216,8 +252,12 @@ fun ChatBubble(
                                             style = customRichTextStyle
                                         ) {
                                             Markdown(
-                                                content = displayText,
-                                                onLinkClicked = { url -> openMarkdownLink(context, url) }
+                                                content = markdownDisplayText,
+                                                onLinkClicked = { url ->
+                                                    val sourceIndex = RagCitationLinks.sourceIndex(url, msg.knowledgeSources)
+                                                    if (sourceIndex != null) selectedSourceIndex = sourceIndex
+                                                    else if (!url.startsWith("rag-source:")) openMarkdownLink(context, url)
+                                                }
                                             )
                                         }
                                     }
@@ -243,8 +283,14 @@ fun ChatBubble(
                             }
                         }
 
+                        if (msg.knowledgeSources.isNotEmpty()) {
+                            KnowledgeSourceCard(msg, onOpenSource = { selectedSourceIndex = it })
+                        } else if (msg.knowledgeRetrievalInfo != null) {
+                            Text(msg.knowledgeRetrievalInfo, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+
                         // 3. 性能指标与 TTS 语音播放按钮栏
-                        if (!isUser && (!msg.metrics.isNullOrEmpty() || (onSpeakClick != null && msg.text.isNotBlank() && !msg.isKnowledgeExcerpt))) {
+                        if (!isUser && (!msg.metrics.isNullOrEmpty() || canSpeak)) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -264,9 +310,9 @@ fun ChatBubble(
                                     Spacer(modifier = Modifier.weight(1f))
                                 }
 
-                                if (onSpeakClick != null && msg.text.isNotBlank() && !msg.isKnowledgeExcerpt) {
+                                if (canSpeak) {
                                     IconButton(
-                                        onClick = onSpeakClick,
+                                        onClick = { onSpeakClick?.invoke() },
                                         modifier = Modifier.size(28.dp)
                                     ) {
                                         Icon(
@@ -277,6 +323,138 @@ fun ChatBubble(
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    selectedSourceIndex?.takeIf { it in msg.knowledgeSources.indices }?.let { index ->
+        KnowledgeSourceSheet(
+            sources = msg.knowledgeSources,
+            selectedIndex = index,
+            onSelectSource = { selectedSourceIndex = it },
+            onDismiss = { selectedSourceIndex = null }
+        )
+    }
+}
+
+@Composable
+private fun KnowledgeSourceCard(msg: ChatMessage, onOpenSource: (Int) -> Unit) {
+    var expanded by remember(msg.id) { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "知识库原文 · ${msg.knowledgeSources.size} 个章节",
+                    modifier = Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                )
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "收起知识库原文" else "展开知识库原文"
+                )
+            }
+            msg.knowledgeRetrievalInfo?.let { info ->
+                Text(info, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            // Only list section headings here. Render a single selected source in the reader.
+            if (expanded) {
+                msg.knowledgeSources.forEachIndexed { index, source ->
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    Text(
+                        source.referenceIds.joinToString(" ") { "[$it]" } + " ${source.docName} · ${source.sectionTitle}",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().clickable { onOpenSource(index) }.padding(vertical = 8.dp)
+                    )
+                }
+            } else {
+                TextButton(onClick = { onOpenSource(0) }) { Text("查看原文") }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun KnowledgeSourceSheet(
+    sources: List<RagSource>,
+    selectedIndex: Int,
+    onSelectSource: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    fun copySource(text: String, label: String) {
+        scope.launch {
+            val clip = ClipData.newPlainText("知识库原文", text)
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                clip.description.extras = android.os.PersistableBundle().apply {
+                    putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                }
+            }
+            try {
+                clipboard.setClipEntry(ClipEntry(clip))
+                Toast.makeText(context, label, Toast.LENGTH_SHORT).show()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: RuntimeException) {
+                Toast.makeText(context, "无法复制，请重试", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    val source = sources[selectedIndex]
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(modifier = Modifier.fillMaxWidth().fillMaxHeight(.88f).padding(horizontal = 16.dp)) {
+            Text("知识库原文", style = MaterialTheme.typography.titleMedium)
+            Text("以下为本地资料，不是模型生成的内容", style = MaterialTheme.typography.bodySmall)
+            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                sources.forEachIndexed { index, item ->
+                    FilterChip(
+                        selected = index == selectedIndex,
+                        onClick = { onSelectSource(index) },
+                        label = { Text(item.referenceIds.joinToString(" ") { "[$it]" } + " " + item.sectionTitle, maxLines = 1) }
+                    )
+                }
+            }
+            key(selectedIndex) {
+                val codeBlocks = remember(source.content) { RagSourceReader.codeBlocks(source.content) }
+                val obsidianLink = remember(source.docName) { cn.xxstudy.assistant.rag.RagGroundingGuard.buildObsidianLink(source.docName) }
+                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+                    Text("${source.docName} · ${source.sectionTitle}", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = {
+                            copySource(source.content, "已复制本章节原文")
+                        }) { Text("复制原文") }
+                        if (obsidianLink != null) {
+                            TextButton(onClick = { openMarkdownLink(context, obsidianLink) }) { Text("打开 Obsidian") }
+                        }
+                    }
+                    if (codeBlocks.isNotEmpty()) {
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            codeBlocks.forEachIndexed { index, block ->
+                                OutlinedButton(onClick = {
+                                    copySource(block.code, "已复制代码 ${index + 1}")
+                                }) { Text("复制代码 ${index + 1}" + block.language.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()) }
+                            }
+                        }
+                    }
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        if (source.content.length > 16_000) {
+                            Text(source.content, fontSize = 13.sp, lineHeight = 20.sp)
+                        } else {
+                            com.halilibo.richtext.ui.material3.Material3RichText {
+                                Markdown(content = source.content, onLinkClicked = { openMarkdownLink(context, it) })
                             }
                         }
                     }

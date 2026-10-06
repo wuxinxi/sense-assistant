@@ -21,6 +21,36 @@ class RagGroundingGuardTest {
     )
 
     @Test
+    fun rejectsSwappedCitationsEvenWhenBothSourcesAreMentioned() {
+        val generated = "- 依赖为 `fluro: ^2.0.3`。[2]\n- 创建 `FluroRouter`。[1]"
+        assertTrue(RagGroundingGuard.ensureGrounded(generated, matches).contains("根据本地知识库，找到以下原文"))
+    }
+
+    @Test
+    fun rejectsUnknownReferenceNumberAndUnsupportedApi() {
+        assertTrue(RagGroundingGuard.ensureGrounded("使用 `FluroRouter`。[99]", matches).contains("根据本地知识库，找到以下原文"))
+        assertTrue(RagGroundingGuard.ensureGrounded("使用 `FluroRouter`，调用 Fluro.unknownApi。[2]", matches).contains("根据本地知识库，找到以下原文"))
+    }
+
+    @Test
+    fun acceptsNumberedCitationWithFactFromThatReference() {
+        val generated = "依赖为 `fluro: ^2.0.3`。[1]"
+        assertEquals(generated, RagGroundingGuard.ensureGrounded(generated, matches))
+    }
+
+    @Test
+    fun rejectsCitationThatPointsToDifferentSource() {
+        val generated = "依赖为 `fluro: ^2.0.3`。[2]"
+        assertTrue(RagGroundingGuard.ensureGrounded(generated, matches).contains("根据本地知识库，找到以下原文"))
+    }
+
+    @Test
+    fun rejectsUnsupportedDependencyEvenAlongsideOneRealFact() {
+        val generated = "根据 Fluro.md，使用 `FluroRouter`，还必须安装 `googleapis_hive`。"
+        assertTrue(RagGroundingGuard.ensureGrounded(generated, matches).contains("根据本地知识库，找到以下原文"))
+    }
+
+    @Test
     fun replacesUncitedGenericAnswerWithKnowledgeBaseExcerpts() {
         val answer = RagGroundingGuard.ensureGrounded(
             generated = "Fluro 是一个流行的 Flutter 集成模块，可以帮助开发者管理应用。",

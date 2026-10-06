@@ -143,6 +143,7 @@ fun SettingsScreen(
     val ttsPitch by AppSettings.ttsPitch.collectAsState()
     val currentModel by AppSettings.currentModelType.collectAsState()
     val enableThinking by AppSettings.enableThinking.collectAsState()
+    val gpuInferenceEnabled by AppSettings.gpuInferenceEnabled.collectAsState()
     val ttsSpeakerId by AppSettings.ttsSpeakerId.collectAsState()
     val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
     val localServerEnabled by AppSettings.localServerEnabled.collectAsState()
@@ -965,7 +966,7 @@ fun SettingsScreen(
                     icon = Icons.Default.Psychology,
                     iconBgColor = Color(0xFFE91E63),
                     title = "深度思考模式 (Thinking)",
-                    subtitle = if (currentModel.supportsThinking) "展示思维链折叠卡片 (<|thought_begin|>)" else "当前模型不支持思维链思考",
+                    subtitle = if (currentModel.supportsThinking) "思考预算 128 tokens，为回答正文预留生成空间" else "当前模型不支持思维链思考",
                     trailing = {
                         Switch(
                             checked = enableThinking && currentModel.supportsThinking,
@@ -984,9 +985,32 @@ fun SettingsScreen(
                     icon = Icons.Default.Speed,
                     iconBgColor = Color(0xFF3F51B5),
                     title = "推理计算加速引擎",
-                    subtitle = "llama.cpp C++17 原生编译 (4 线程 DotProd)",
+                    subtitle = "优化 CPU · 4 线程 DotProd；GPU 是否更快取决于设备和量化格式",
                     trailing = {
-                        SettingTagBadge(text = "4-Thread", isSuccess = true)
+                        SettingTagBadge(text = if (gpuInferenceEnabled) "GPU 请求" else "CPU · 4", isSuccess = true)
+                    }
+                )
+
+                SettingRowDivider()
+
+                val isEngineLoading = mainViewModel?.isLoading?.collectAsState()?.value ?: false
+                SettingItemRow(
+                    icon = Icons.Default.Memory,
+                    iconBgColor = Color(0xFF3F51B5),
+                    title = "GPU 推理 (OpenCL · 实验)",
+                    subtitle = "实验验证用，可能生成异常或变慢；切换会重置上下文。Ace2 的 Q4_K_M 建议保持关闭",
+                    trailing = {
+                        Switch(
+                            checked = gpuInferenceEnabled,
+                            enabled = !isEngineLoading,
+                            onCheckedChange = { enabled ->
+                                triggerHaptic()
+                                AppSettings.setGpuInferenceEnabled(enabled)
+                                if (mainViewModel?.isModelLoaded?.value == true) {
+                                    mainViewModel.switchModel(context, currentModel)
+                                }
+                            }
+                        )
                     }
                 )
 

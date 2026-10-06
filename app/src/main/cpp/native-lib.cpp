@@ -7,6 +7,9 @@
 #include <mutex>
 #include <cmath>
 #include "llama.h"
+#include "ggml-backend.h"
+#include "cpu-worker-pool.h"
+#include "generation-policy.h"
 #include <android/log.h>
 
 #define TAG "TangRenLlamaJNI"
@@ -17,9 +20,77 @@
 llama_model *g_model = nullptr;
 llama_context *g_ctx = nullptr;
 std::string g_current_model_path = "";
+std::mutex g_ctx_mutex;
+bool g_current_gpu_requested = false;
+std::string g_backend_label = "未加载";
+static ggml_backend_dev_t g_llm_devices[2] = {nullptr, nullptr};
+static ggml_backend_dev_t g_cpu_devices[1] = {nullptr};
+static std::mutex g_backend_mutex;
+static CpuWorkerPool g_generation_workers;
+
+// Call with g_ctx_mutex held, after inference has finished.
+static void free_generation_context() {
+    if (g_ctx != nullptr) {
+        llama_detach_threadpool(g_ctx);
+        llama_free(g_ctx);
+        g_ctx = nullptr;
+    }
+    g_generation_workers.reset();
+}
+
+// Explicit plugin loading avoids searching /system/bin (app_process), and
+// keeps the optional vendor OpenCL dependency out of the CPU library chain.
+static bool ensure_cpu_backend() {
+    if (ggml_backend_reg_by_name("CPU") == nullptr &&
+        ggml_backend_load("libggml-cpu.so") == nullptr) {
+        LOGE("Could not load CPU backend");
+        return false;
+    }
+    llama_backend_init();
+    return true;
+}
+
+static bool load_generation_context(const std::string & path, int n_ctx, ggml_backend_dev_t device) {
+    g_llm_devices[0] = device;
+    llama_model_params model_params = llama_model_default_params();
+    model_params.devices = device ? g_llm_devices : g_cpu_devices;
+    model_params.n_gpu_layers = device ? -1 : 0;
+    g_model = llama_model_load_from_file(path.c_str(), model_params);
+    if (g_model == nullptr) return false;
+
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = n_ctx;
+    ctx_params.n_threads = 4;
+    ctx_params.n_threads_batch = 4;
+    ctx_params.offload_kqv = device != nullptr;
+    ctx_params.op_offload = device != nullptr;
+    ctx_params.no_perf = false;
+    // The verified Adreno path uses ordinary attention, not experimental FA.
+    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    g_ctx = llama_init_from_model(g_model, ctx_params);
+    if (g_ctx == nullptr) {
+        llama_model_free(g_model);
+        g_model = nullptr;
+        return false;
+    }
+    if (device == nullptr && !g_generation_workers.attach(g_ctx, 4)) {
+        LOGE("Could not attach persistent CPU workers");
+        free_generation_context();
+        llama_model_free(g_model);
+        g_model = nullptr;
+        return false;
+    }
+    return true;
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_cn_xxstudy_assistant_engine_LlamaEngine_getBackendName(JNIEnv *env, jobject thiz) {
+    std::lock_guard<std::mutex> lock(g_ctx_mutex);
+    return env->NewStringUTF(g_backend_label.c_str());
+}
 
 // 线程安全与打断控制
-std::mutex g_ctx_mutex;
 std::atomic<bool> g_should_stop{false};
 
 // 多轮对话状态追踪 (KV Cache 管理)
@@ -32,6 +103,7 @@ JNIEXPORT void JNICALL
 Java_cn_xxstudy_assistant_engine_LlamaEngine_resetSession(JNIEnv *env, jobject thiz) {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
     if (g_ctx != nullptr) {
+        llama_synchronize(g_ctx);
         llama_memory_clear(llama_get_memory(g_ctx), true);
     }
     g_n_past = 0;
@@ -53,15 +125,15 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_releaseContext(JNIEnv *env, jobject
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
     if (g_ctx != nullptr) {
         LOGI("releaseContext: Releasing existing llama_context...");
-        llama_free(g_ctx);
-        g_ctx = nullptr;
     }
+    free_generation_context();
     if (g_model != nullptr) {
         LOGI("releaseContext: Releasing existing llama_model...");
         llama_model_free(g_model);
         g_model = nullptr;
     }
     g_current_model_path.clear();
+    g_backend_label = "未加载";
     g_n_past = 0;
     g_n_keep = 0;
     g_turn_starts.clear();
@@ -70,20 +142,22 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_releaseContext(JNIEnv *env, jobject
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path, jint n_ctx) {
+Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path, jint n_ctx, jboolean use_gpu) {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
+    std::lock_guard<std::mutex> backend_lock(g_backend_mutex);
 
     const char *path = env->GetStringUTFChars(model_path, nullptr);
     std::string new_path(path ? path : "");
     env->ReleaseStringUTFChars(model_path, path);
 
-    if (new_path.empty()) {
-        LOGE("initContext: Empty model path provided!");
+    if (new_path.empty() || n_ctx <= 0) {
+        LOGE("initContext: Invalid model path/context size!");
         return JNI_FALSE;
     }
 
     // 若当前已经加载了同一个物理文件，且 Context 健全，直接复用
-    if (g_model != nullptr && g_ctx != nullptr && g_current_model_path == new_path) {
+    if (g_model != nullptr && g_ctx != nullptr && g_current_model_path == new_path &&
+        g_current_gpu_requested == static_cast<bool>(use_gpu) && llama_n_ctx(g_ctx) == static_cast<uint32_t>(n_ctx)) {
         LOGI("Model already loaded from identical path: %s", new_path.c_str());
         return JNI_TRUE;
     }
@@ -91,44 +165,49 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_initContext(JNIEnv *env, jobject th
     // 核心修复：若此前已装载过旧模型，先彻底释放旧 Context 和 Model 内存，避免内存泄漏与模型锁死！
     if (g_ctx != nullptr) {
         LOGI("Releasing existing llama_context...");
-        llama_free(g_ctx);
-        g_ctx = nullptr;
     }
+    free_generation_context();
     if (g_model != nullptr) {
         LOGI("Releasing existing llama_model...");
         llama_model_free(g_model);
         g_model = nullptr;
     }
     g_current_model_path.clear();
+    g_backend_label = "未加载";
 
     LOGI("Attempting to load new model from: %s", new_path.c_str());
     
-    llama_backend_init();
-    
-    llama_model_params model_params = llama_model_default_params();
-    g_model = llama_model_load_from_file(new_path.c_str(), model_params);
-    
-    if (g_model == nullptr) {
-        LOGE("Failed to load model from %s!", new_path.c_str());
-        return JNI_FALSE;
+    if (!ensure_cpu_backend()) return JNI_FALSE;
+    ggml_backend_dev_t gpu = nullptr;
+    if (use_gpu) {
+        auto reg = ggml_backend_reg_by_name("OpenCL");
+        if (reg == nullptr) reg = ggml_backend_load("libggml-opencl.so");
+        if (reg != nullptr) {
+            for (size_t i = 0; i < ggml_backend_reg_dev_count(reg); ++i) {
+                auto candidate = ggml_backend_reg_dev_get(reg, i);
+                if (ggml_backend_dev_type(candidate) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    gpu = candidate;
+                    break;
+                }
+            }
+        }
     }
-    
-    llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = n_ctx; // Use user configured context size
-    
-    // 性能优化：显式指定线程数（通常设置为 4 个大核能达到最佳能效比）
-    ctx_params.n_threads = 4;
-    ctx_params.n_threads_batch = 4;
-    
-    g_ctx = llama_init_from_model(g_model, ctx_params);
-    if (g_ctx == nullptr) {
-        LOGE("Failed to create context from model!");
-        llama_model_free(g_model);
-        g_model = nullptr;
-        return JNI_FALSE;
+    if (!load_generation_context(new_path, n_ctx, gpu)) {
+        if (gpu == nullptr || !load_generation_context(new_path, n_ctx, nullptr)) {
+            LOGE("Failed to load model/context from %s", new_path.c_str());
+            return JNI_FALSE;
+        }
+        gpu = nullptr;
     }
-    
+    if (gpu != nullptr) {
+        g_backend_label = "GPU OpenCL";
+        LOGI("Inference backend: OpenCL (%s), requested all-layer offload", ggml_backend_dev_description(gpu));
+    } else {
+        g_backend_label = use_gpu ? "CPU (GPU 不可用)" : "CPU · 4 线程";
+        LOGI("Inference backend: CPU, 4 threads, persistent workers, GPU offload disabled");
+    }
     g_current_model_path = new_path;
+    g_current_gpu_requested = use_gpu;
     g_n_past = 0;
     g_n_keep = 0;
     g_turn_starts.clear();
@@ -216,6 +295,10 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     } else {
         final_prompt = "<|im_start|>user\n" + prompt_str + "<|im_end|>\n<|im_start|>assistant\n";
     }
+    if (disable_thinking && apply_disabled_thinking_template(
+            final_prompt, llama_model_chat_template(g_model, nullptr))) {
+        LOGI("Thinking disabled using model chat template");
+    }
     
     // 2. Tokenize
     const struct llama_vocab * vocab = llama_model_get_vocab(g_model);
@@ -289,6 +372,11 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     // Record the current turn only after eviction so it can never be selected
     // as an already-completed eviction range.
     g_turn_starts.push_back(g_n_past);
+    const int kv_tokens_before_prompt = g_n_past;
+    // Capped output may leave one queued eval in llama's accounting. Flush
+    // before reset so idle time cannot enter the next request's prefill sample.
+    llama_synchronize(g_ctx);
+    llama_perf_context_reset(g_ctx);
 
     // 4. 将 Prompt 送入推理上下文 (Ingest)
     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
@@ -310,13 +398,15 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
 
     // 5. 初始化采样器
     auto sparams = llama_sampler_chain_default_params();
+    sparams.no_perf = false;
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
     
     if (disable_thinking) {
         auto get_token = [&](const std::string& str) {
             std::vector<llama_token> t(2);
             int n = llama_tokenize(vocab, str.c_str(), str.length(), t.data(), t.size(), false, true);
-            if (n > 0) return t[0];
+            // Do not ban the first piece of a multi-token tag (e.g. plain '<').
+            if (n == 1) return t[0];
             return (llama_token)-1;
         };
         llama_token t1 = get_token("<|thought_begin|>");
@@ -343,6 +433,10 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     bool is_first_token = true;
     long long ttft_ms = 0;
     int generated_tokens = 0;
+    double callback_ms = 0.0;
+    const int thought_limit = thinking_token_limit(max_predict);
+    bool forced_thinking_end = false;
+    int control_tokens = 0;
     
     // B1 思考链外科手术：记录起始和结束坐标
     int pos_thought_start = -1;
@@ -391,7 +485,10 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
                 token_stream_buf.erase(0, complete_len);
 
                 jstring j_token = env->NewStringUTF(ready_text.c_str());
+                const auto callback_start = std::chrono::steady_clock::now();
                 env->CallVoidMethod(callback, onTokenMethod, j_token);
+                callback_ms += std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - callback_start).count();
                 env->DeleteLocalRef(j_token);
             }
         }
@@ -407,6 +504,50 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
             break;
         }
         g_n_past++;
+
+        // Preserve history, but reserve tokens for an answer using the model's
+        // matching closing marker. Wait for a complete UTF-8 boundary first.
+        if (!forced_thinking_end && thought_limit > 0 && generated_tokens >= thought_limit &&
+            token_stream_buf.empty()) {
+            const auto end_tag = pending_thinking_end(response);
+            if (!end_tag.empty()) {
+                const std::string close_text = "\n" + end_tag + "\n\n";
+                std::vector<llama_token> close_tokens(64);
+                const int n_close = llama_tokenize(vocab, close_text.c_str(), close_text.size(),
+                                                   close_tokens.data(), close_tokens.size(), false, true);
+                if (n_close > 0 && i + n_close < max_predict && g_n_past + n_close < static_cast<int>(n_ctx)) {
+                    auto close_batch = llama_batch_init(n_close, 0, 1);
+                    close_batch.n_tokens = n_close;
+                    for (int j = 0; j < n_close; ++j) {
+                        close_batch.token[j] = close_tokens[j];
+                        close_batch.pos[j] = g_n_past + j;
+                        close_batch.n_seq_id[j] = 1;
+                        close_batch.seq_id[j][0] = 0;
+                        close_batch.logits[j] = j == n_close - 1;
+                    }
+                    const int decode_status = llama_decode(g_ctx, close_batch);
+                    llama_batch_free(close_batch);
+                    if (decode_status != 0) {
+                        LOGE("Could not close bounded thinking");
+                        break;
+                    }
+                    for (int j = 0; j < n_close; ++j) llama_sampler_accept(smpl, close_tokens[j]);
+                    g_n_past += n_close;
+                    i += n_close; // forced control tokens consume the same cap
+                    control_tokens += n_close;
+                    forced_thinking_end = true;
+                    response += close_text;
+                    const auto callback_start = std::chrono::steady_clock::now();
+                    jstring j_close = env->NewStringUTF(close_text.c_str());
+                    env->CallVoidMethod(callback, onTokenMethod, j_close);
+                    env->DeleteLocalRef(j_close);
+                    callback_ms += std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - callback_start).count();
+                    if (end_tag == "<|thought_end|>") pos_thought_end = g_n_past - 1;
+                    LOGI("Thinking budget reached: limit=%d control_tokens=%d; reserving final answer", thought_limit, n_close);
+                }
+            }
+        }
     }
     
     llama_batch_free(batch);
@@ -422,6 +563,7 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
         LOGI("B1: Thought chain start found but no end. Skipping excision to avoid corruption.");
     }
     
+    llama_synchronize(g_ctx);
     auto t_end = std::chrono::high_resolution_clock::now();
     long long total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
     
@@ -438,6 +580,13 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
 
     char metrics_buf[256];
     snprintf(metrics_buf, sizeof(metrics_buf), "<|metrics|>{\"ttft_ms\":%lld,\"total_ms\":%lld,\"speed\":%.1f}", ttft_ms, total_ms, speed);
+    LOGI("Generation metrics: backend=%s tokens=%d ttft_ms=%lld total_ms=%lld speed=%.1f tk/s",
+         g_backend_label.c_str(), generated_tokens, ttft_ms, total_ms, speed);
+    const auto perf = llama_perf_context(g_ctx);
+    const auto sampling_perf = llama_perf_sampler(smpl);
+    LOGI("Generation stages: prompt_tokens=%d kv_before=%d prefill_ms=%.1f decode_tokens=%d decode_ms=%.1f sample_ms=%.1f callback_ms=%.1f thought_limit=%d forced_think_end=%d control_tokens=%d",
+         n_tokens, kv_tokens_before_prompt, perf.t_p_eval_ms, perf.n_eval,
+         perf.t_eval_ms, sampling_perf.t_sample_ms, callback_ms, thought_limit, forced_thinking_end, control_tokens);
     response += metrics_buf;
     
     llama_sampler_free(smpl);
@@ -477,6 +626,7 @@ extern "C"
 JNIEXPORT jboolean JNICALL
 Java_cn_xxstudy_assistant_engine_EmbeddingEngine_initContext(JNIEnv *env, jobject thiz, jstring model_path) {
     std::lock_guard<std::mutex> lock(g_embed_mutex);
+    std::lock_guard<std::mutex> backend_lock(g_backend_mutex);
 
     const char *path = env->GetStringUTFChars(model_path, nullptr);
     std::string new_path(path ? path : "");
@@ -502,10 +652,12 @@ Java_cn_xxstudy_assistant_engine_EmbeddingEngine_initContext(JNIEnv *env, jobjec
     }
     g_current_embed_model_path.clear();
 
-    llama_backend_init();
+    if (!ensure_cpu_backend()) return JNI_FALSE;
 
     LOGI("EmbeddingEngine: Loading embedding model from %s...", new_path.c_str());
     llama_model_params model_params = llama_model_default_params();
+    model_params.devices = g_cpu_devices;
+    model_params.n_gpu_layers = 0;
 
     g_embed_model = llama_model_load_from_file(new_path.c_str(), model_params);
     if (g_embed_model == nullptr) {
@@ -519,6 +671,8 @@ Java_cn_xxstudy_assistant_engine_EmbeddingEngine_initContext(JNIEnv *env, jobjec
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
     ctx_params.embeddings = true;
+    ctx_params.offload_kqv = false;
+    ctx_params.op_offload = false;
     // BGE-small-zh-v1.5 is trained with the first [CLS] token as the
     // sentence representation. Mean pooling changes the embedding space and
     // materially degrades retrieval quality.

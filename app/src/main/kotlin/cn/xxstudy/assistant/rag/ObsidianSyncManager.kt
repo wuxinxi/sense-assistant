@@ -32,6 +32,7 @@ class ObsidianSyncManager(private val context: Context) {
 
     private val dbHelper = KnowledgeDatabaseHelper.getInstance(context)
     private val retriever = KnowledgeRetriever(context)
+    private val indexState = context.getSharedPreferences("obsidian_index_state", Context.MODE_PRIVATE)
 
     private val _progress = MutableStateFlow(SyncProgress())
     val progress: StateFlow<SyncProgress> = _progress.asStateFlow()
@@ -85,6 +86,9 @@ class ObsidianSyncManager(private val context: Context) {
             )
 
             val recordedDocs = dbHelper.getAllRecordedDocs()
+            // No startup wipe or database migration. The next explicit sync
+            // replaces each document transactionally; failures keep old chunks.
+            val indexedRevision = indexState.getInt("chunker_revision", 1)
             val currentScannedUris = mutableSetOf<String>()
             val failedFiles = mutableListOf<String>()
 
@@ -100,10 +104,10 @@ class ObsidianSyncManager(private val context: Context) {
                 currentScannedUris.add(fileUriStr)
 
                 val existing = recordedDocs[fileUriStr]
-                val hasReliableMetadata = lastModified > 0L && sizeBytes > 0L
-                val isUnchanged = hasReliableMetadata && existing != null &&
-                    existing.lastModified == lastModified &&
-                    existing.sizeBytes == sizeBytes
+                val isUnchanged = RagIndexPolicy.canSkip(
+                    indexedRevision, MarkdownChunker.REVISION,
+                    existing?.lastModified, existing?.sizeBytes, lastModified, sizeBytes
+                )
 
                 if (isUnchanged) {
                     processedCount++
@@ -190,6 +194,8 @@ class ObsidianSyncManager(private val context: Context) {
 
             Log.i(TAG, "Obsidian sync completed: docs=${stats.first}, chunks=${stats.second}, failures=${failedFiles.size}")
             if (failedFiles.isEmpty()) {
+                // Do not mark a partially upgraded vault as current.
+                indexState.edit().putInt("chunker_revision", MarkdownChunker.REVISION).apply()
                 Result.success(stats)
             } else {
                 Result.failure(IllegalStateException("${failedFiles.size} 篇笔记索引失败"))

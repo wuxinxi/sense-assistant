@@ -17,14 +17,16 @@ object RagSectionExpander {
     ): List<RagSectionChunk> {
         if (seeds.isEmpty() || maxChars <= 0) return emptyList()
 
-        val selectedSections = seeds
-            .map { it.docName to it.sectionTitle }
+        val selectedSections = seeds.filter { it.docId != null }
+            .map { it.docId to it.sectionTitle }
             .toSet()
+        val legacySections = seeds.filter { it.docId == null }.map { it.docName to it.sectionTitle }.toSet()
         val result = mutableListOf<RagSectionChunk>()
         var usedChars = 0
 
         for (chunk in allChunks.sortedBy { it.id }) {
-            if ((chunk.docName to chunk.sectionTitle) !in selectedSections) continue
+            if ((chunk.docId to chunk.sectionTitle) !in selectedSections &&
+                (chunk.docName to chunk.sectionTitle) !in legacySections) continue
             if (usedChars + chunk.content.length > maxChars) {
                 val remaining = maxChars - usedChars
                 if (remaining > 0) {

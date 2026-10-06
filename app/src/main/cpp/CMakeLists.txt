@@ -17,20 +17,14 @@ set_target_properties(ggml PROPERTIES
     IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libggml.so
 )
 
-add_library(ggml-cpu SHARED IMPORTED)
-set_target_properties(ggml-cpu PROPERTIES
-    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libggml-cpu.so
-)
-
 add_library(ggml-base SHARED IMPORTED)
 set_target_properties(ggml-base PROPERTIES
     IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libggml-base.so
 )
 
-add_library(omp SHARED IMPORTED)
-set_target_properties(omp PROPERTIES
-    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libomp.so
-)
+# CPU and OpenCL are MODULE plugins, packaged by jniLibs and loaded by name.
+# MODULEs have no SONAME; linking an imported one records a host absolute path.
+# OpenCL must also stay optional for phones without the vendor GPU library.
 
 # 编译应用专属的 JNI 桥接库 (llama.cpp 交互)
 add_library(${CMAKE_PROJECT_NAME} SHARED
@@ -40,8 +34,5 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
 target_link_libraries(${CMAKE_PROJECT_NAME}
         llama
         ggml
-        ggml-cpu
         ggml-base
-        omp
         log)
-

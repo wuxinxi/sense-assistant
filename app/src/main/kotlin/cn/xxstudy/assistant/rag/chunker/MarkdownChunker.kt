@@ -6,6 +6,8 @@ data class RawChunk(
 )
 
 object MarkdownChunker {
+    const val REVISION = 2
+    private const val MAX_CODE_CHUNK_SIZE = 1_200
     private const val DEFAULT_TARGET_CHUNK_SIZE = 300
     private const val DEFAULT_OVERLAP_SIZE = 50
     // Obsidian 中常见只有一行的短事实笔记，不能因长度不足而静默丢弃。
@@ -25,6 +27,8 @@ object MarkdownChunker {
         overlap: Int = DEFAULT_OVERLAP_SIZE
     ): List<RawChunk> {
         val cleanDocName = docName.removeSuffix(".md").removeSuffix(".markdown")
+        require(targetChunkSize > 0) { "chunkSize must be positive" }
+        require(overlap in 0 until targetChunkSize) { "overlap must be in [0, chunkSize)" }
         val stripped = stripFrontmatter(rawContent)
         if (stripped.isBlank()) return emptyList()
 
@@ -34,25 +38,57 @@ object MarkdownChunker {
         var currentHeading = "正文"
         val currentHeadingBreadcrumb = mutableListOf<String>()
         val buffer = StringBuilder()
+        val codeLines = mutableListOf<String>()
+        var fence: String? = null
+        var openingLine = ""
+
+        fun flushProse() {
+            if (buffer.isNotBlank()) {
+                sections.addAll(splitLongText(currentHeading, buffer.toString().trim(), targetChunkSize, overlap))
+            }
+            buffer.clear()
+        }
+
+        fun flushCode(closingLine: String) {
+            // Code uses a soft prose limit. Very large blocks are divided only
+            // at line boundaries, with their language and fences on every part.
+            val parts = mutableListOf<String>()
+            val part = StringBuilder()
+            for (line in codeLines) {
+                if (part.isNotEmpty() && part.length + line.length + 1 > MAX_CODE_CHUNK_SIZE) {
+                    parts += part.toString().removeSuffix("\n")
+                    part.clear()
+                }
+                part.append(line).append('\n')
+            }
+            if (part.isNotEmpty() || parts.isEmpty()) parts += part.toString().removeSuffix("\n")
+            parts.forEach { sections += RawChunk(currentHeading, "$openingLine\n$it\n$closingLine") }
+            codeLines.clear()
+            fence = null
+        }
 
         val headingRegex = Regex("""^(#{1,6})\s+(.+)$""")
 
         for (line in lines) {
             val trimmed = line.trim()
+            val activeFence = fence
+            if (activeFence != null) {
+                val closing = trimmed.length >= activeFence.length && trimmed.all { it == activeFence.first() }
+                if (closing) flushCode(line) else codeLines += line
+                continue
+            }
+            val codeStart = Regex("^ {0,3}(`{3,}|~{3,})(.*)$").find(line)
+            if (codeStart != null) {
+                flushProse()
+                fence = codeStart.groupValues[1]
+                openingLine = line
+                continue
+            }
             val match = headingRegex.find(trimmed)
 
             if (match != null) {
                 // 遇到新标题：先把前一个 section 的文本结算
-                if (buffer.isNotBlank()) {
-                    val chunks = splitLongText(
-                        currentHeading,
-                        buffer.toString().trim(),
-                        targetChunkSize,
-                        overlap
-                    )
-                    sections.addAll(chunks)
-                    buffer.clear()
-                }
+                flushProse()
 
                 val level = match.groupValues[1].length
                 val title = match.groupValues[2].trim()
@@ -72,15 +108,9 @@ object MarkdownChunker {
             }
         }
 
-        if (buffer.isNotBlank()) {
-            val chunks = splitLongText(
-                currentHeading,
-                buffer.toString().trim(),
-                targetChunkSize,
-                overlap
-            )
-            sections.addAll(chunks)
-        }
+        // An incomplete source fence is closed for rendering; code text is kept.
+        fence?.let { flushCode(it) }
+        flushProse()
 
         // 统一包裹上下文前缀：[来源: 笔记名 > 标题]
         return sections.filter { it.text.length >= MIN_CHUNK_SIZE }.map { chunk ->

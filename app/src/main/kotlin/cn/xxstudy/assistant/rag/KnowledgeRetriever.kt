@@ -12,17 +12,20 @@ data class KnowledgeMatch(
     val docName: String,
     val sectionTitle: String,
     val content: String,
-    val score: Float
+    val score: Float,
+    val docId: Long? = null
 )
 
 class KnowledgeRetriever(private val context: Context) {
     companion object {
         private const val TAG = "KnowledgeRetriever"
 
+        private data class CachedIndex(val syncTime: Long, val chunks: List<StoredChunk>) {
+            val search = RagSearchIndex(chunks)
+        }
+
         @Volatile
-        private var cachedChunks: List<StoredChunk> = emptyList()
-        @Volatile
-        private var lastSyncTimeCache: Long = -1L
+        private var cachedIndex: CachedIndex? = null
         private val cacheLock = Any()
 
         val EMBEDDING_MODEL_NAMES = listOf(
@@ -79,118 +82,45 @@ class KnowledgeRetriever(private val context: Context) {
         query: String,
         topK: Int = AppSettings.ragTopK.value,
         threshold: Float = AppSettings.ragScoreThreshold.value
-    ): List<KnowledgeMatch> {
-        if (query.isBlank()) return emptyList()
+    ): List<KnowledgeMatch> = retrieveDetailed(query, topK, threshold).matches
 
-        if (!ensureModelLoaded()) {
-            Log.w(TAG, "Failed to initialize EmbeddingEngine, skipping RAG retrieval.")
-            return emptyList()
-        }
+    fun retrieveDetailed(
+        query: String,
+        topK: Int = AppSettings.ragTopK.value,
+        threshold: Float = AppSettings.ragScoreThreshold.value
+    ): RagSearchResult {
+        if (query.isBlank()) return RagSearchResult(emptyList(), RagSearchMode.EMPTY)
 
         val t0 = System.currentTimeMillis()
-        val queryEmbedding = EmbeddingEngine.embed(query)
-        if (queryEmbedding == null) {
-            Log.e(TAG, "Failed to compute query embedding.")
-            return emptyList()
-        }
-        val tEmbed = System.currentTimeMillis() - t0
-
-        val t1 = System.currentTimeMillis()
-        val currentSyncTime = AppSettings.ragLastSyncTime.value
-        if (cachedChunks.isEmpty() || lastSyncTimeCache != currentSyncTime) {
-            synchronized(cacheLock) {
-                if (cachedChunks.isEmpty() || lastSyncTimeCache != currentSyncTime) {
-                    Log.i(TAG, "Reloading chunks from SQLite into memory cache...")
-                    cachedChunks = dbHelper.getAllChunks()
-                    lastSyncTimeCache = currentSyncTime
-                }
+        val index = getIndex()
+        var embedTime = 0L
+        val result = index.search.search(query, { text ->
+            val start = System.currentTimeMillis()
+            try {
+                if (ensureModelLoaded()) EmbeddingEngine.embed(text) else null
+            } finally {
+                embedTime = System.currentTimeMillis() - start
             }
-        }
-        val allChunks = cachedChunks
-        if (allChunks.isEmpty()) {
-            return emptyList()
-        }
-
-        // 归一化向量下点积即为余弦相似度。维度不一致意味着索引来自
-        // 其他模型或旧版本，不能静默使用部分向量。
-        var dimensionMismatchCount = 0
-        data class ScoredChunk(
-            val chunk: StoredChunk,
-            val denseScore: Float,
-            val lexicalBonus: Float
-        )
-
-        val lexicalQuery = RagHybridRanker.prepare(query)
-        val scoredChunks = allChunks.mapNotNull { chunk ->
-            if (chunk.embedding.size != queryEmbedding.size) {
-                dimensionMismatchCount++
-                null
-            } else {
-                ScoredChunk(
-                    chunk = chunk,
-                    denseScore = dotProduct(queryEmbedding, chunk.embedding),
-                    lexicalBonus = RagHybridRanker.lexicalBonus(
-                        query = lexicalQuery,
-                        docName = chunk.docName,
-                        sectionTitle = chunk.sectionTitle,
-                        content = chunk.content
-                    )
-                )
-            }
-        }
-        if (dimensionMismatchCount > 0) {
-            Log.w(TAG, "Ignored $dimensionMismatchCount chunks with incompatible embedding dimensions")
-        }
-
-        val ranked = scoredChunks.sortedByDescending {
-            RagHybridRanker.combinedScore(it.denseScore, it.lexicalBonus)
-        }
-        val bestScore = scoredChunks.maxOfOrNull { it.denseScore }
-        val adaptiveThreshold = if (bestScore == null) {
-            threshold
-        } else {
-            // 避免把明显弱于最佳结果的尾部切片一起塞入 Prompt。
-            maxOf(threshold, bestScore - 0.08f)
-        }
-
-        val safeTopK = topK.coerceIn(1, 8)
-        val perDocumentCount = mutableMapOf<String, Int>()
-        var lexicalOverrideCount = 0
-        val matches = buildList {
-            for (candidate in ranked) {
-                if (size >= safeTopK) break
-                if (!RagHybridRanker.shouldInclude(
-                        denseScore = candidate.denseScore,
-                        denseThreshold = adaptiveThreshold,
-                        lexicalBonus = candidate.lexicalBonus
-                    )
-                ) {
-                    continue
-                }
-                val chunk = candidate.chunk
-                val count = perDocumentCount[chunk.docName] ?: 0
-                if (count >= 2) continue
-                perDocumentCount[chunk.docName] = count + 1
-                if (candidate.denseScore < adaptiveThreshold) lexicalOverrideCount++
-                add(
-                    KnowledgeMatch(
-                        docName = chunk.docName,
-                        sectionTitle = chunk.sectionTitle,
-                        content = chunk.content,
-                        score = candidate.denseScore
-                    )
-                )
-            }
-        }
-
-        val tSearch = System.currentTimeMillis() - t1
+        }, topK, threshold)
+        if (result.embeddingFailed) Log.w(TAG, "Embedding unavailable; used independent keyword retrieval")
         Log.i(
             TAG,
-            "RAG Retrieval done: totalChunks=${allChunks.size}, hits=${matches.size}, " +
-                "bestScore=${bestScore ?: "n/a"}, threshold=$adaptiveThreshold, " +
-                "lexicalOverrides=$lexicalOverrideCount, embedTime=${tEmbed}ms, searchTime=${tSearch}ms"
+            "RAG Retrieval done: totalChunks=${index.chunks.size}, hits=${result.matches.size}, " +
+                "mode=${result.mode}, incompatibleChunks=${result.incompatibleChunkCount}, " +
+                "embedTime=${embedTime}ms, searchTime=${System.currentTimeMillis() - t0 - embedTime}ms"
         )
-        return matches
+        return result
+    }
+
+    private fun getIndex(): CachedIndex {
+        val syncTime = AppSettings.ragLastSyncTime.value
+        cachedIndex?.takeIf { it.syncTime == syncTime }?.let { return it }
+        return synchronized(cacheLock) {
+            cachedIndex?.takeIf { it.syncTime == syncTime } ?: run {
+                Log.i(TAG, "Reloading knowledge search index from SQLite...")
+                CachedIndex(syncTime, dbHelper.getAllChunks()).also { cachedIndex = it }
+            }
+        }
     }
 
     /**
@@ -202,7 +132,7 @@ class KnowledgeRetriever(private val context: Context) {
         maxChars: Int = 64_000
     ): List<KnowledgeMatch> {
         if (seeds.isEmpty()) return emptyList()
-        val allChunks = cachedChunks.ifEmpty { dbHelper.getAllChunks() }
+        val allChunks = getIndex().chunks
         val sectionChunks = allChunks.map { chunk ->
             RagSectionChunk(
                 id = chunk.id,
@@ -213,24 +143,18 @@ class KnowledgeRetriever(private val context: Context) {
             )
         }
         val scoresBySection = seeds.associate { seed ->
-            (seed.docName to seed.sectionTitle) to seed.score
+            Triple(seed.docId, seed.docName, seed.sectionTitle) to seed.score
         }
         return RagSectionExpander.expand(seeds, sectionChunks, maxChars).map { chunk ->
             KnowledgeMatch(
                 docName = chunk.docName,
                 sectionTitle = chunk.sectionTitle,
                 content = chunk.content,
-                score = scoresBySection[chunk.docName to chunk.sectionTitle] ?: 0f
+                score = scoresBySection[Triple(chunk.docId, chunk.docName, chunk.sectionTitle)]
+                    ?: scoresBySection[Triple(null, chunk.docName, chunk.sectionTitle)] ?: 0f,
+                docId = chunk.docId
             )
         }
     }
 
-    private fun dotProduct(a: FloatArray, b: FloatArray): Float {
-        require(a.size == b.size) { "Embedding dimensions must match" }
-        var sum = 0.0f
-        for (i in a.indices) {
-            sum += a[i] * b[i]
-        }
-        return sum
-    }
 }

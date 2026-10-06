@@ -33,7 +33,22 @@ data class ChatMessage(
     /** Knowledge-base excerpts are source material, never executable intent JSON. */
     val isKnowledgeExcerpt: Boolean = false,
     /** Keeps streaming answers on the lightweight text renderer until completion. */
-    val isStreaming: Boolean = false
+    val isStreaming: Boolean = false,
+    /** References are never sent through intent execution or speech synthesis. */
+    val knowledgeSources: List<cn.xxstudy.assistant.rag.RagSource> = emptyList(),
+    val knowledgeStage: cn.xxstudy.assistant.rag.RagKnowledgeStage? = null,
+    val knowledgeRetrievalInfo: String? = null
+)
+
+/** Keep cancelled RAG drafts distinct from completed, citation-checked answers. */
+internal fun ChatMessage.finishInterruptedGeneration(): ChatMessage = copy(
+    text = if (text.isBlank() && thinkingText.isNullOrBlank()) "（已打断）" else text,
+    isThinking = false,
+    isThinkingActive = false,
+    isStreaming = false,
+    knowledgeStage = null,
+    isKnowledgeExcerpt = isKnowledgeExcerpt || knowledgeSources.isNotEmpty(),
+    metrics = if (knowledgeSources.isNotEmpty()) "生成已中止 · 引用未核对" else metrics
 )
 
 /**
@@ -161,12 +176,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isLoading.value = true
             _statusMessage.value = "引擎装载中 (${modelType.displayName})..."
-            val success = repository.loadModel(absolutePath, AppSettings.contextSize.value)
+            val success = repository.loadModel(absolutePath, AppSettings.contextSize.value, AppSettings.gpuInferenceEnabled.value)
             _isLoading.value = false
             if (success) {
                 _isModelLoaded.value = true
                 _currentLoadedModel.value = modelType
-                _statusMessage.value = "在线 (${modelType.displayName})"
+                _statusMessage.value = "在线 (${modelType.displayName} · ${repository.getBackendName()})"
                 // 添加或更新开场白
                 if (_chatMessages.value.isEmpty()) {
                     _chatMessages.value = listOf(
@@ -218,12 +233,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isLoading.value = true
             _statusMessage.value = "引擎切换中 (${targetModel.displayName})..."
             
-            val success = repository.loadModel(targetFile.absolutePath, AppSettings.contextSize.value)
+            val success = repository.loadModel(targetFile.absolutePath, AppSettings.contextSize.value, AppSettings.gpuInferenceEnabled.value)
             _isLoading.value = false
             if (success) {
                 _isModelLoaded.value = true
                 _currentLoadedModel.value = targetModel
-                _statusMessage.value = "在线 (${targetModel.displayName})"
+                _statusMessage.value = "在线 (${targetModel.displayName} · ${repository.getBackendName()})"
                 
                 // 对话流提示：若已有消息则追加切换通告，若无消息则显示新模型开场白
                 if (_chatMessages.value.isEmpty()) {
@@ -306,9 +321,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // 将上一条被打断的 AI 消息封口（停止转圈动效）
             currentThinkingId?.let { oldId ->
                 val list = _chatMessages.value.map {
-                    if (it.id == oldId && (it.isThinking || it.isThinkingActive)) {
-                        val finalMsg = if (it.text.isBlank() && it.thinkingText.isNullOrBlank()) "（已打断）" else it.text
-                        it.copy(text = finalMsg, isThinking = false, isThinkingActive = false)
+                    if (it.id == oldId && (it.isThinking || it.isThinkingActive || it.isStreaming || it.knowledgeStage != null)) {
+                        it.finishInterruptedGeneration()
                     } else it
                 }
                 _chatMessages.value = list
@@ -324,7 +338,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // 3. 插入新 AI "思考中" 占位
         val thinkingId = messageCounter++
         currentThinkingId = thinkingId
-        val thinkingMsg = ChatMessage(thinkingId, false, "", isThinking = true, isStreaming = true)
+        val thinkingMsg = ChatMessage(thinkingId, false, "", isThinking = true, isStreaming = true,
+            knowledgeStage = if (AppSettings.isObsidianRagEnabled.value)
+                cn.xxstudy.assistant.rag.RagKnowledgeStage.RETRIEVING else null)
 
         _chatMessages.value = _chatMessages.value + listOf(userMsg, thinkingMsg)
 
@@ -344,7 +360,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         isThinking = false,
                         isThinkingActive = false,
                         metrics = "知识库状态",
-                        isStreaming = false
+                        isStreaming = false,
+                        knowledgeStage = null
                     )
                 } else {
                     message
@@ -372,6 +389,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             
             var ragContextPrompt = ""
             var ragMatches: List<cn.xxstudy.assistant.rag.KnowledgeMatch> = emptyList()
+            var ragSources: List<cn.xxstudy.assistant.rag.RagSource> = emptyList()
+            var ragRetrievalInfo: String? = null
             val isExplicitRagLookup = cn.xxstudy.assistant.rag.RagQueryNormalizer
                 .isExplicitKnowledgeLookup(prompt)
             val ragQuery = cn.xxstudy.assistant.rag.RagQueryNormalizer.normalize(prompt)
@@ -383,23 +402,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             "MainViewModel",
                             "RAG query prepared: inputChars=${prompt.trim().length}, searchChars=${ragQuery.length}"
                         )
-                        val seeds = knowledgeRetriever.retrieve(ragQuery)
+                        val retrievalStart = android.os.SystemClock.elapsedRealtime()
+                        val result = knowledgeRetriever.retrieveDetailed(ragQuery)
+                        val seeds = result.matches
+                        val retrievalMillis = android.os.SystemClock.elapsedRealtime() - retrievalStart
+                        val modeName = when {
+                            seeds.isEmpty() -> "本轮未引用知识库"
+                            result.mode == cn.xxstudy.assistant.rag.RagSearchMode.KEYWORD -> "关键词检索"
+                            else -> "混合检索"
+                        }
+                        ragRetrievalInfo = "$modeName · ${seeds.size} 个命中 · ${retrievalMillis} ms"
                         if (isExplicitRagLookup) {
                             knowledgeRetriever.expandMatchedSections(seeds, maxChars = 64_000)
                         } else {
+                            ragSources = cn.xxstudy.assistant.rag.RagSourcePresenter.sources(
+                                seeds,
+                                knowledgeRetriever.expandMatchedSections(seeds, maxChars = 32_000)
+                            )
                             seeds
                         }
                     }
                     if (matches.isNotEmpty()) {
                         ragMatches = matches
                         if (!isExplicitRagLookup) {
-                            ragContextPrompt = cn.xxstudy.assistant.rag.RagPromptBuilder.build(matches)
+                            ragContextPrompt = cn.xxstudy.assistant.rag.RagPromptBuilder.build(matches, prompt)
                         }
                         android.util.Log.i("MainViewModel", "RAG: Injected ${matches.size} chunks into prompt")
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     android.util.Log.e("MainViewModel", "RAG retrieval error", e)
                 }
+            }
+
+            _chatMessages.value = _chatMessages.value.map { message ->
+                if (message.id == thinkingId) message.copy(
+                    knowledgeSources = ragSources,
+                    knowledgeRetrievalInfo = ragRetrievalInfo,
+                    knowledgeStage = if (ragMatches.isNotEmpty()) cn.xxstudy.assistant.rag.RagKnowledgeStage.GENERATING else null
+                ) else message
             }
 
             val disableThinkingForRequest = cn.xxstudy.assistant.rag.RagGenerationPolicy
@@ -424,7 +466,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isThinking = false,
                             isThinkingActive = false,
                             metrics = "知识库未命中",
-                            isStreaming = false
+                            isStreaming = false,
+                            knowledgeStage = null
                         )
                     } else {
                         message
@@ -452,7 +495,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isThinkingActive = false,
                             metrics = "知识库原文 · ${ragMatches.size} 个分块",
                             isKnowledgeExcerpt = true,
-                            isStreaming = false
+                            isStreaming = false,
+                            knowledgeStage = null
                         )
                     } else {
                         message
@@ -468,27 +512,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            var finalPrompt = ""
-            // RAG requests are made self-contained and start from a clean KV cache. This
-            // prevents a previous generic answer from overpowering the retrieved evidence.
-            if (isFirstTurn || ragMatches.isNotEmpty()) {
-                val sysText = AppSettings.getEffectiveSystemPrompt(currentModel)
-                finalPrompt += "<|im_start|>system\n$sysText"
-                if (disableThinkingForRequest) {
-                    finalPrompt += "\n请直接给出最终回答，无需输出思考过程。"
-                }
-                finalPrompt += "<|im_end|>\n"
-            }
-
-            if (ragContextPrompt.isNotEmpty()) {
-                finalPrompt += "<|im_start|>user\n${ragContextPrompt}\n\n我的问题是：${prompt}<|im_end|>\n<|im_start|>assistant\n"
-            } else {
-                finalPrompt += "<|im_start|>user\n${prompt}<|im_end|>\n<|im_start|>assistant\n"
-            }
-            
-            if (disableThinkingForRequest) {
-                finalPrompt = "<|system_cmd_disable_thinking|>" + finalPrompt
-            }
+            val systemPrompt = AppSettings.getEffectiveSystemPrompt(currentModel)
+            // The repository decides when native KV is fresh, including RAG -> zero-hit
+            // chat transitions; UI message count alone cannot identify that boundary.
+            val conversationMode = if (ragMatches.isNotEmpty()) cn.xxstudy.assistant.repository.ConversationMode.RAG
+                else cn.xxstudy.assistant.repository.ConversationMode.CHAT
 
             // 初始化 TTS 流式切句器（仅当开启答案语音朗读时）
             var chunker: cn.xxstudy.assistant.speech.SentenceChunker? = null
@@ -550,13 +578,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
-                if (ragMatches.isNotEmpty()) {
-                    repository.resetSession()
-                }
                 // 调用带有打断检测的推理方法
-                val rawResponse = repository.generateText(finalPrompt) { token ->
-                    channel.trySend(token)
-                }
+                val rawResponse = repository.generateConversation(
+                    mode = conversationMode,
+                    isFirstTurn = isFirstTurn,
+                    buildPrompt = { includeSystem ->
+                        cn.xxstudy.assistant.repository.ConversationPromptBuilder.build(
+                            systemPrompt = systemPrompt, question = prompt, ragContext = ragContextPrompt,
+                            includeSystem = includeSystem, disableThinking = disableThinkingForRequest
+                        )
+                    },
+                    onToken = { token -> channel.trySend(token) }
+                )
 
                 // 推理结束，关闭 channel 并等待 UI 刷新完最后一批字符
                 channel.close()
@@ -571,14 +604,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     thinkingText = finalSnapshot.thinkingText
                 )
 
-                var groundedText = cn.xxstudy.assistant.rag.RagGroundingGuard.ensureGrounded(
-                    generated = actualText,
-                    matches = ragMatches
-                )
-                if (groundedText != actualText) {
+                if (ragMatches.isNotEmpty()) {
+                    _chatMessages.value = _chatMessages.value.map { message ->
+                        if (message.id == thinkingId) message.copy(knowledgeStage = cn.xxstudy.assistant.rag.RagKnowledgeStage.CHECKING) else message
+                    }
+                }
+
+                val ragAnswer = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                    cn.xxstudy.assistant.rag.RagSourcePresenter.present(
+                        generated = actualText,
+                        matches = ragMatches
+                    )
+                }
+                var groundedText = ragAnswer.text
+                if (ragAnswer.isFallback) {
                     android.util.Log.w(
                         "MainViewModel",
-                        "RAG answer failed grounding check; using retrieved excerpts"
+                        "RAG answer failed grounding check; offering source panel"
                     )
                 }
 
@@ -657,14 +699,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isThinkingActive = false,
                             isThinking = false,
                             metrics = metricsInfo,
-                            isStreaming = false
+                            isKnowledgeExcerpt = ragAnswer.isFallback,
+                            isStreaming = false,
+                            knowledgeStage = null
                         )
                     } else it
                 }
                 _chatMessages.value = finalUpdatedList
 
                 // 兜底朗读：仅在未开启流式切句且非意图识别消息时执行整句播报
-                if (chunker == null && parsedActions == null && AppSettings.ttsAutoPlay.value && groundedText.isNotBlank() && groundedText != "（回复为空）") {
+                if (chunker == null && parsedActions == null && !ragAnswer.isFallback && AppSettings.ttsAutoPlay.value && groundedText.isNotBlank() && groundedText != "（回复为空）") {
                     speakMessage(thinkingId, groundedText)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -673,7 +717,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 uiUpdaterJob.cancel()
                 speechManager.stopSpeaking()
                 _speakingMessageId.value = null
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Answer generation failed", e)
+                channel.close()
+                uiUpdaterJob.cancel()
+                speechManager.stopSpeaking()
+                _speakingMessageId.value = null
+                _chatMessages.value = _chatMessages.value.map { message ->
+                    if (message.id == thinkingId) message.copy(
+                        text = if (ragSources.isNotEmpty()) "本次摘要生成失败，可查看下方知识库原文，或重试。" else "本次回答生成失败，请重试。",
+                        isKnowledgeExcerpt = ragSources.isNotEmpty()
+                    ) else message
+                }
             } finally {
+                _chatMessages.value = _chatMessages.value.map { message ->
+                    if (message.id == thinkingId && (message.isStreaming || message.knowledgeStage != null)) {
+                        message.finishInterruptedGeneration()
+                    } else message
+                }
                 if (currentThinkingId == thinkingId) {
                     currentThinkingId = null
                 }
@@ -807,9 +868,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentGenerationJob?.cancel()
             currentThinkingId?.let { oldId ->
                 val list = _chatMessages.value.map {
-                    if (it.id == oldId && (it.isThinking || it.isThinkingActive)) {
-                        val finalMsg = if (it.text.isBlank() && it.thinkingText.isNullOrBlank()) "（已打断）" else it.text
-                        it.copy(text = finalMsg, isThinking = false, isThinkingActive = false)
+                    if (it.id == oldId && (it.isThinking || it.isThinkingActive || it.isStreaming || it.knowledgeStage != null)) {
+                        it.finishInterruptedGeneration()
                     } else it
                 }
                 _chatMessages.value = list

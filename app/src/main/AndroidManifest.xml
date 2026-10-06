@@ -48,6 +48,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Appsenseassistant">
+        <!-- Android 12+ must explicitly expose optional vendor GPU libraries. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

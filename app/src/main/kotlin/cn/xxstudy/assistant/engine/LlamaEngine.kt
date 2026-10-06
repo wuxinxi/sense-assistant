@@ -21,7 +21,10 @@ class LlamaEngine {
      * Initialize the Llama context with the given model path and context size.
      * Returns true if successful, false otherwise.
      */
-    external fun initContext(modelPath: String, nCtx: Int): Boolean
+    external fun initContext(modelPath: String, nCtx: Int, useGpu: Boolean): Boolean
+
+    /** 实际加载的计算后端；GPU 请求失败时会明确返回 CPU 回退状态。 */
+    external fun getBackendName(): String
 
     /**
      * 手动重置当前的对话上下文缓存，用于开启新对话或切换模型。
