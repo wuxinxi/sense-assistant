@@ -67,7 +67,7 @@ object ActionRegistry {
         val summaries = requests.map { request ->
             getHandler(request.action).formatSpeech(request)
         }
-        return "好的，已为您执行：" + summaries.joinToString("，然后")
+        return "待确认的操作建议：" + summaries.joinToString("，然后")
     }
 
     /**

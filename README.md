@@ -440,6 +440,9 @@ app-sense-assistant/
 ├── Script/
 │   ├── download_all.sh               # 一键自动下载 Qwen2.5, SenseVoice, MeloTTS 与 BGE 模型
 │   ├── download_models.py            # 国内镜像源极速拉取脚本 (HuggingFace Mirror / ModelScope)
+│   ├── download_minicpm.py           # MiniCPM GGUF 下载与断点续传
+│   ├── build_native_runtime.sh       # 固定版本原生推理库构建
+│   ├── check_native_dependencies.sh  # 原生库打包依赖检查
 │   └── push_models_to_phone.sh       # 一键 ADB 灌入手机沙盒并配置权限
 ├── app/
 │   ├── libs/

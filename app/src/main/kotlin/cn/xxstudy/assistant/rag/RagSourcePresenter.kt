@@ -7,7 +7,19 @@ data class RagSource(
     val content: String
 )
 
-data class RagPresentedAnswer(val text: String, val isFallback: Boolean)
+data class RagPresentedAnswer(
+    val text: String,
+    val isFallback: Boolean,
+    val kind: cn.xxstudy.assistant.conversation.AnswerKind? = null,
+    val issues: List<RagAnswerIssue> = emptyList(),
+    val generalRejections: List<RagGeneralRejection> = emptyList()
+) {
+    val validationNotice: String? get() = issues.takeIf { it.isNotEmpty() }
+        ?.joinToString("；", prefix = "摘要检查：") { it.label }
+    /** Report rejected blocks even if another block was accepted; never include the draft. */
+    val validationEvent: String? get() = issues.takeIf { it.isNotEmpty() }
+        ?.joinToString(", ", prefix = "RAG answer validation: kind=${kind?.name ?: "UNCLASSIFIED"}, issues=") { it.name }
+}
 
 /** Source code stays application-owned; the model only writes an explanation. */
 object RagSourcePresenter {
@@ -25,7 +37,17 @@ object RagSourcePresenter {
         }
     }
 
-    fun present(generated: String, matches: List<KnowledgeMatch>): RagPresentedAnswer {
+    fun present(
+        generated: String,
+        matches: List<KnowledgeMatch>,
+        policy: RagAnswerPolicy? = null,
+        hasFinalAnswer: Boolean = true
+    ): RagPresentedAnswer {
+        if (matches.isNotEmpty() && policy != null) {
+            // App-generated empty/thinking-only notices are not model claims to validate.
+            val composed = RagAnswerComposer.compose(if (hasFinalAnswer) generated else "", matches, policy)
+            return RagPresentedAnswer(composed.text, composed.isFallback, composed.kind, composed.issues, composed.generalRejections)
+        }
         if (matches.isEmpty() || RagGroundingGuard.isGrounded(generated, matches)) {
             return RagPresentedAnswer(generated, false)
         }

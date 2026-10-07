@@ -1,6 +1,5 @@
 package cn.xxstudy.assistant.rag
 
-import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -34,13 +33,5 @@ class RagPromptEfficiencyTest {
             assertTrue("missing source fact $it", after.contains(it))
         }
         println("RAG_PROMPT_FIXTURE before_chars=${before.length} after_chars=${after.length}")
-        // Optional generated fixtures for the vocabulary-only device probe.
-        System.getenv("RAG_PROMPT_FIXTURES_DIR")?.let { path ->
-            val directory = File(path).also { it.mkdirs() }
-            val prefix = "<|im_start|>system\n你是一个简洁的中文助手。<|im_end|>\n<|im_start|>user\n"
-            val suffix = "\n\n我的问题是：帮我介绍 Flutter 数据库 Hive<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
-            File(directory, "before.txt").writeText(prefix + before + suffix)
-            File(directory, "after.txt").writeText(prefix + after + suffix)
-        }
     }
 }

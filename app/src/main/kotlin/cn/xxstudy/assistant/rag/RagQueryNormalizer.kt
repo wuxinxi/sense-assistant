@@ -10,6 +10,7 @@ object RagQueryNormalizer {
         """^\s*(?:请帮我|帮我|请)?\s*(?:查询|搜索|查找|检索)\s*(?:本地)?知识库(?:中|里|内)?\s*[:：,，]?\s*""",
         RegexOption.IGNORE_CASE
     )
+    private val sourceScopePrefix = Regex("^\\s*(?:请|帮我|请帮我)?(?:只|仅|严格|完全)?(?:根据|依据|按照|按)(?:我的|本地|当前)?(?:笔记|资料|知识库)(?:内容)?\\s*[:：,，]?\\s*")
     private val knowledgeBaseStatusPatterns = listOf(
         Regex("""^(?:你|您)?(?:是否|能否|能不能|可不可以|可以|能)?(?:了解|知道|访问|读取|查看|使用|连接)(?:我的|我|本地|这个)?知识库(?:吗|么|呢)?[?？。！!]*$"""),
         Regex("""^(?:我的|我|本地|这个)?知识库(?:里|中|内)?(?:有|包含)(?:什么|哪些)(?:内容|笔记|资料)?(?:吗|么|呢)?[?？。！!]*$"""),
@@ -20,6 +21,7 @@ object RagQueryNormalizer {
     fun normalize(rawQuery: String): String {
         val original = rawQuery.trim()
         val normalized = original
+            .replace(sourceScopePrefix, "")
             .replace(searchKnowledgeBasePrefix, "")
             .replace(knowledgeBasePrefix, "")
             .trim()

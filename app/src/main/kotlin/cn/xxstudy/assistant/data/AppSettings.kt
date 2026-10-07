@@ -177,7 +177,7 @@ object AppSettings {
     private val _hapticEnabled = MutableStateFlow(true)
     val hapticEnabled: StateFlow<Boolean> = _hapticEnabled.asStateFlow()
 
-    private val _localServerEnabled = MutableStateFlow(true)
+    private val _localServerEnabled = MutableStateFlow(false)
     val localServerEnabled: StateFlow<Boolean> = _localServerEnabled.asStateFlow()
 
     // 离线语音唤醒 (KWS) 相关配置
@@ -262,7 +262,7 @@ object AppSettings {
         _ttsModelId.value = prefs.getString(KEY_TTS_MODEL_ID, "vits-melo-tts-zh_en") ?: "vits-melo-tts-zh_en"
 
         _hapticEnabled.value = prefs.getBoolean(KEY_HAPTIC_ENABLED, true)
-        _localServerEnabled.value = prefs.getBoolean(KEY_LOCAL_SERVER_ENABLED, true)
+        _localServerEnabled.value = prefs.getBoolean(KEY_LOCAL_SERVER_ENABLED, false)
 
         _isKwsEnabled.value = prefs.getBoolean(KEY_KWS_ENABLED, true)
         _isPhoneModeEnabled.value = prefs.getBoolean(KEY_PHONE_MODE_ENABLED, false)

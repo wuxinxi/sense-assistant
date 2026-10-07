@@ -7,6 +7,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -113,15 +114,7 @@ fun IntentActionCard(
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .clickable {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            scope.launch {
-                                actions.forEach { ActionRegistry.execute(context, it) }
-                                Toast.makeText(context, "已重新执行 ${actions.size} 项指令", Toast.LENGTH_SHORT).show()
-                            }
-                        }
+                    modifier = Modifier.clip(RoundedCornerShape(20.dp))
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -135,7 +128,7 @@ fun IntentActionCard(
                         )
                         Spacer(modifier = Modifier.width(3.dp))
                         Text(
-                            text = "已自动执行",
+                            text = "请逐项确认",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -215,7 +208,10 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
     var activeState by remember(item) {
         mutableStateOf(item.optString("state") ?: "on")
     }
-    var executionFeedback by remember { mutableStateOf<String?>(null) }
+    var executionFeedback by remember(item) { mutableStateOf<String?>(null) }
+    var confirmationVisible by remember(item) { mutableStateOf(false) }
+    var pendingState by remember(item) { mutableStateOf<String?>(null) }
+    var executing by remember(item) { mutableStateOf(false) }
 
     // 从注册中心动态获取当前 Action 的 UI 描述符，完全无须在此类编写具体业务判断
     val descriptor = remember(item, activeState, context) {
@@ -225,19 +221,37 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
     val isOn = descriptor.isOn
 
     fun doExecute() {
+        if (executing) return
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        scope.launch {
-            val nextState = if (descriptor.isToggleable) {
+        pendingState = if (descriptor.isToggleable && executionFeedback != null) {
                 if (isOn) descriptor.toggleOffState else descriptor.toggleOnState
-            } else descriptor.actionOverrideState
+            } else if (descriptor.isToggleable) item.optString("state") ?: descriptor.toggleOnState
+            else descriptor.actionOverrideState
+        confirmationVisible = true
+    }
 
-            val result = ActionRegistry.execute(context, item, overrideState = nextState)
-            if (nextState != null) {
-                activeState = nextState
-            }
-            executionFeedback = result.message
-            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-        }
+    if (confirmationVisible) {
+        AlertDialog(
+            onDismissRequest = { confirmationVisible = false },
+            title = { Text("确认执行：${descriptor.title}") },
+            text = { SelectionContainer {
+                Text("${descriptor.summary}\n\n操作：${item.action}\n参数：${item.params}\n实际状态：${pendingState ?: "按参数执行"}")
+            } },
+            confirmButton = { TextButton(onClick = confirm@ {
+                if (executing) return@confirm
+                confirmationVisible = false
+                executing = true
+                scope.launch {
+                    try {
+                        val result = ActionRegistry.execute(context, item, overrideState = pendingState)
+                        if (result.isSuccess && pendingState != null) activeState = pendingState!!
+                        executionFeedback = result.message
+                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    } finally { executing = false }
+                }
+            }) { Text("确认执行") } },
+            dismissButton = { TextButton(onClick = { confirmationVisible = false }) { Text("取消") } }
+        )
     }
 
     Surface(
@@ -324,7 +338,7 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
                     )
                     Spacer(modifier = Modifier.width(3.dp))
                     Text(
-                        text = if (isOn) "关闭" else "打开",
+                        text = if (executionFeedback == null) "确认执行" else if (isOn) "关闭" else "打开",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -350,7 +364,7 @@ private fun ActionItemRow(index: Int, item: ActionRequest) {
                     )
                     Spacer(modifier = Modifier.width(3.dp))
                     Text(
-                        text = descriptor.actionButtonText ?: "再次执行",
+                        text = if (executionFeedback == null) "确认执行" else descriptor.actionButtonText ?: "再次执行",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,

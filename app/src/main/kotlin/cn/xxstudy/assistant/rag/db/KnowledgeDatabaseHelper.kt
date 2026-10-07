@@ -42,9 +42,7 @@ class KnowledgeDatabaseHelper(context: Context) :
 
     companion object {
         private const val DB_NAME = "obsidian_knowledge.db"
-        // Version 2 invalidates vectors generated with the old, incorrect
-        // Mean Pooling configuration and adds file-size metadata.
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = KnowledgeSchemaMigration.VERSION
 
         const val TABLE_DOCUMENTS = "documents"
         const val COL_DOC_ID = "id"
@@ -122,9 +120,7 @@ class KnowledgeDatabaseHelper(context: Context) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_CHUNKS")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_DOCUMENTS")
-        onCreate(db)
+        KnowledgeSchemaMigration.statements(oldVersion, newVersion).forEach(db::execSQL)
     }
 
     override fun onConfigure(db: SQLiteDatabase) {

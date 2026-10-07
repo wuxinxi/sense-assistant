@@ -26,6 +26,10 @@ class LlamaEngine {
     /** 实际加载的计算后端；GPU 请求失败时会明确返回 CPU 回退状态。 */
     external fun getBackendName(): String
 
+    /** Exact same protocol and tokenizer as generateText, including BOS/prefill. */
+    external fun countPromptTokens(prompt: String): Int
+    external fun getContextCapacity(): Int
+
     /**
      * 手动重置当前的对话上下文缓存，用于开启新对话或切换模型。
      */
@@ -35,6 +39,9 @@ class LlamaEngine {
      * 简单的非流式对话推理生成接口
      */
     external fun generateText(prompt: String, callback: LlamaCallback): String
+
+    /** Called only by the process owner before exposing a request as cancellable. */
+    external fun prepareGeneration(requestId: Long)
 
     /**
      * 主动打断当前正在进行的推理任务

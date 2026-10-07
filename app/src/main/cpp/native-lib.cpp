@@ -93,6 +93,14 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_getBackendName(JNIEnv *env, jobject
 // 线程安全与打断控制
 std::atomic<bool> g_should_stop{false};
 
+extern "C"
+JNIEXPORT void JNICALL
+Java_cn_xxstudy_assistant_engine_LlamaEngine_prepareGeneration(JNIEnv *, jobject, jlong) {
+    // Kotlin's process owner serializes prepare/generate. Never reset this flag
+    // inside generate: cancellation may arrive between preparation and JNI entry.
+    g_should_stop.store(false);
+}
+
 // 多轮对话状态追踪 (KV Cache 管理)
 int g_n_keep = 0; // Attention sink tokens (System prompt)
 int g_n_past = 0; // Current total tokens in cache
@@ -259,15 +267,43 @@ static size_t get_complete_utf8_length(const std::string &s) {
     return last_complete;
 }
 
+// Shared by budgeting and generation. Must hold g_ctx_mutex.
+static std::string format_generation_prompt(std::string prompt, bool & disable_thinking) {
+    const std::string disable_flag = "<|system_cmd_disable_thinking|>";
+    disable_thinking = prompt.find(disable_flag) == 0;
+    if (disable_thinking) prompt.erase(0, disable_flag.length());
+    if (prompt.find("<|im_start|>") == std::string::npos) {
+        prompt = "<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n";
+    }
+    if (disable_thinking) apply_disabled_thinking_template(prompt, llama_model_chat_template(g_model, nullptr));
+    return prompt;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_cn_xxstudy_assistant_engine_LlamaEngine_countPromptTokens(JNIEnv *env, jobject, jstring prompt) {
+    std::lock_guard<std::mutex> lock(g_ctx_mutex);
+    if (!g_model || !g_ctx) return -1;
+    const char * raw = env->GetStringUTFChars(prompt, nullptr);
+    if (!raw) return -1;
+    bool disable_thinking = false;
+    const std::string formatted = format_generation_prompt(raw, disable_thinking);
+    env->ReleaseStringUTFChars(prompt, raw);
+    const int count = llama_tokenize(llama_model_get_vocab(g_model), formatted.c_str(), formatted.length(), nullptr, 0, true, true);
+    return count < 0 ? -count : count;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_cn_xxstudy_assistant_engine_LlamaEngine_getContextCapacity(JNIEnv *, jobject) {
+    std::lock_guard<std::mutex> lock(g_ctx_mutex);
+    return g_ctx ? static_cast<jint>(llama_n_ctx(g_ctx)) : 0;
+}
+
 // 统一受互斥锁保护并支持即时打断的推理接口
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject thiz, jstring prompt, jobject callback) {
     // 互斥锁保护：确保同一时刻只有一个线程操作 g_ctx，彻底避免多线程并发 SIGSEGV
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
-
-    // 重置打断标志
-    g_should_stop.store(false);
 
     if (g_model == nullptr || g_ctx == nullptr) {
         return env->NewStringUTF("Error: Model not initialized.");
@@ -282,23 +318,7 @@ Java_cn_xxstudy_assistant_engine_LlamaEngine_generateText(JNIEnv *env, jobject t
     LOGI("Received prompt: %zu bytes", prompt_str.size());
     
     bool disable_thinking = false;
-    std::string disable_flag = "<|system_cmd_disable_thinking|>";
-    if (prompt_str.find(disable_flag) == 0) {
-        disable_thinking = true;
-        prompt_str = prompt_str.substr(disable_flag.length());
-    }
-
-    // 1. 组装 Chat Template
-    std::string final_prompt;
-    if (prompt_str.find("<|im_start|>") != std::string::npos) {
-        final_prompt = prompt_str;
-    } else {
-        final_prompt = "<|im_start|>user\n" + prompt_str + "<|im_end|>\n<|im_start|>assistant\n";
-    }
-    if (disable_thinking && apply_disabled_thinking_template(
-            final_prompt, llama_model_chat_template(g_model, nullptr))) {
-        LOGI("Thinking disabled using model chat template");
-    }
+    const std::string final_prompt = format_generation_prompt(prompt_str, disable_thinking);
     
     // 2. Tokenize
     const struct llama_vocab * vocab = llama_model_get_vocab(g_model);

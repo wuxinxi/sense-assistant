@@ -66,7 +66,7 @@ fun ChatBubble(
     var selectedSourceIndex by remember(msg.id) { mutableStateOf<Int?>(null) }
     val canSpeak = onSpeakClick != null && msg.text.isNotBlank() && !msg.isKnowledgeExcerpt &&
         (msg.knowledgeSources.isEmpty() || (!msg.isStreaming && msg.knowledgeStage == null))
-    val renderAsPlainText = msg.isStreaming ||
+    val renderAsPlainText = msg.isConversationRecap || msg.isStreaming ||
         (msg.isKnowledgeExcerpt && msg.text.length > 16_000)
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -94,12 +94,11 @@ fun ChatBubble(
         val markdownDisplayText = if (!isUser && !msg.isStreaming && msg.knowledgeSources.isNotEmpty()) {
             remember(displayText, msg.knowledgeSources) { RagCitationLinks.linkify(displayText, msg.knowledgeSources) }
         } else displayText
-        val isKnowledgeAnswer = msg.isKnowledgeExcerpt || msg.knowledgeSources.isNotEmpty()
-        val parsedActions = if (!isUser && !isKnowledgeAnswer && displayText.isNotBlank()) {
+        val parsedActions = if (!isUser && !msg.isReadOnlyContent && displayText.isNotBlank()) {
             IntentParser.parse(displayText)
         } else null
         val trimmed = displayText.trim()
-        val isPotentialJson = !isUser && !isKnowledgeAnswer && (
+        val isPotentialJson = !isUser && !msg.isReadOnlyContent && (
             trimmed.startsWith("[") || 
             trimmed.startsWith("{") || 
             trimmed.startsWith("```json") || 
@@ -179,7 +178,7 @@ fun ChatBubble(
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "正在解析并准备执行操作指令...",
+                                            text = "正在解析操作建议，执行前需要确认...",
                                             fontSize = 13.sp,
                                             color = MaterialTheme.colorScheme.primary,
                                             fontWeight = FontWeight.Medium
@@ -333,6 +332,7 @@ fun ChatBubble(
     selectedSourceIndex?.takeIf { it in msg.knowledgeSources.indices }?.let { index ->
         KnowledgeSourceSheet(
             sources = msg.knowledgeSources,
+            historical = msg.isHistoricalKnowledge,
             selectedIndex = index,
             onSelectSource = { selectedSourceIndex = it },
             onDismiss = { selectedSourceIndex = null }
@@ -354,7 +354,7 @@ private fun KnowledgeSourceCard(msg: ChatMessage, onOpenSource: (Int) -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "知识库原文 · ${msg.knowledgeSources.size} 个章节",
+                    (if (msg.isHistoricalKnowledge) "历史原文快照" else "检索原文") + " · ${msg.knowledgeSources.size} 个章节",
                     modifier = Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold
                 )
                 Icon(
@@ -365,6 +365,10 @@ private fun KnowledgeSourceCard(msg: ChatMessage, onOpenSource: (Int) -> Unit) {
             msg.knowledgeRetrievalInfo?.let { info ->
                 Text(info, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            Text(if (msg.isHistoricalKnowledge) "以下是回答当时的检索快照，不代表笔记当前内容，也不是新一轮回答的依据。"
+                else if (msg.isStreaming || msg.knowledgeStage != null) "正文尚未完成校验，原文可先查看。"
+                else "以下是检索候选原文，不代表每篇都被正文引用。",
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             // Only list section headings here. Render a single selected source in the reader.
             if (expanded) {
                 msg.knowledgeSources.forEachIndexed { index, source ->
@@ -388,6 +392,7 @@ private fun KnowledgeSourceCard(msg: ChatMessage, onOpenSource: (Int) -> Unit) {
 @Composable
 private fun KnowledgeSourceSheet(
     sources: List<RagSource>,
+    historical: Boolean,
     selectedIndex: Int,
     onSelectSource: (Int) -> Unit,
     onDismiss: () -> Unit
@@ -416,8 +421,9 @@ private fun KnowledgeSourceSheet(
     val source = sources[selectedIndex]
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(modifier = Modifier.fillMaxWidth().fillMaxHeight(.88f).padding(horizontal = 16.dp)) {
-            Text("知识库原文", style = MaterialTheme.typography.titleMedium)
-            Text("以下为本地资料，不是模型生成的内容", style = MaterialTheme.typography.bodySmall)
+            Text(if (historical) "历史原文快照" else "知识库原文", style = MaterialTheme.typography.titleMedium)
+            Text(if (historical) "回答当时保存的资料；打开 Obsidian 查看的是当前笔记，内容可能已变化。"
+                else "以下为本地资料，不是模型生成的内容", style = MaterialTheme.typography.bodySmall)
             Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 sources.forEachIndexed { index, item ->
                     FilterChip(

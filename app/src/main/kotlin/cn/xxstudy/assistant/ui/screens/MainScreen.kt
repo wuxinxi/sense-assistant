@@ -50,6 +50,8 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val statusMessage by viewModel.statusMessage.collectAsState()
     val chatMessages by viewModel.chatMessages.collectAsState()
     val speakingMessageId by viewModel.speakingMessageId.collectAsState()
+    val historyReady by viewModel.historyReady.collectAsState()
+    val historyNotice by viewModel.historyNotice.collectAsState()
 
     val hapticEnabled by AppSettings.hapticEnabled.collectAsState()
     val showPerformanceOverlay by AppSettings.showPerformanceOverlay.collectAsState()
@@ -201,7 +203,8 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (!isLlmEngineEnabled) "系统状态: 纯语音测试 (大模型未启用)" else "系统状态: $statusMessage",
+                            text = if (!historyReady) historyNotice.orEmpty()
+                                else if (!isLlmEngineEnabled) "系统状态: 纯语音测试 (大模型未启用)" else "系统状态: $statusMessage",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onBackground
                         )
@@ -240,6 +243,11 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     }
                 }
 
+                historyNotice?.let { notice ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(notice, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 if (showPerformanceOverlay) {
                     Spacer(modifier = Modifier.height(6.dp))
                     PerformanceBadge(metrics = deviceMetrics)
@@ -290,13 +298,20 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     Toast.makeText(context, "更多功能暂未开放", Toast.LENGTH_SHORT).show()
                 },
                 onSendClick = {
-                    if (!isModelLoaded) {
-                        Toast.makeText(context, "大模型引擎加载中，请稍候...", Toast.LENGTH_SHORT).show()
-                        return@DoubaoInputBar
-                    }
-                    if (inputText.isNotBlank()) {
+                    val accepted = submitChatInput(
+                        input = inputText, historyReady = historyReady,
+                        modelReady = isModelLoaded, engineEnabled = isLlmEngineEnabled,
+                        onRejected = { reason ->
+                            val notice = when (reason) {
+                                ChatInputRejection.HISTORY_NOT_READY -> historyNotice.orEmpty()
+                                ChatInputRejection.MODEL_NOT_READY -> "大模型引擎加载中，请稍候..."
+                            }
+                            Toast.makeText(context, notice, Toast.LENGTH_SHORT).show()
+                        },
+                        onSend = viewModel::sendMessage
+                    )
+                    if (accepted) {
                         autoScrollToBottom = true
-                        viewModel.sendMessage(inputText)
                         inputText = ""
                     }
                 },

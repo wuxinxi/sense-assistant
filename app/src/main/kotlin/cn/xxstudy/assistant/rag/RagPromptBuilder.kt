@@ -6,7 +6,7 @@ package cn.xxstudy.assistant.rag
 object RagPromptBuilder {
     private const val TOTAL_REFERENCE_CHARS = 1_200
     private const val MAX_REFERENCE_CHARS = 600
-    fun build(matches: List<KnowledgeMatch>, question: String = ""): String {
+    fun build(matches: List<KnowledgeMatch>, question: String = "", policy: RagAnswerPolicy = RagAnswerPolicy.SOURCE_ONLY): String {
         if (matches.isEmpty()) return ""
         val referenceBudget = minOf(MAX_REFERENCE_CHARS, TOTAL_REFERENCE_CHARS / matches.size.coerceAtLeast(1))
 
@@ -21,9 +21,11 @@ object RagPromptBuilder {
             }
             appendLine()
             val detailed = Regex("详细|完整|步骤|逐步|detail|step.by.step", RegexOption.IGNORE_CASE).containsMatchIn(question)
-            appendLine(if (detailed) "按问题解释所需步骤，每点引用资料编号如[1]。" else "简短回答，最多3点，每点引用资料编号如[1]。")
+            appendLine(if (policy == RagAnswerPolicy.FUSION) "资料说明每点引用编号如[1]；通用段不带引用。回答简短，细节与代码见原文。"
+                else if (detailed) "按问题解释所需步骤，每点引用资料编号如[1]。" else "简短回答，最多3点，每点引用资料编号如[1]。")
             appendLine("代码见原文，不要抄写；禁止写空泛介绍或编造API、依赖、版本。")
-            append("只依据资料；不能支持的问题明确说“知识库资料不足”。")
+            append(if (policy == RagAnswerPolicy.SOURCE_ONLY) "只依据资料；不能支持的问题明确说“知识库资料不足”。"
+                else "资料说明与通用补充分开输出；通用补充不引用资料，不猜私人配置。")
         }
     }
 
@@ -81,6 +83,8 @@ object RagPromptBuilder {
         .replace("<|im_end|>", "＜|im_end|＞")
         .replace("<reference", "＜reference")
         .replace("</reference>", "＜/reference＞")
+        .replace(RagAnswerComposer.SOURCE_MARKER, "〔资料说明〕")
+        .replace(RagAnswerComposer.GENERAL_MARKER, "〔通用补充〕")
 
     private fun sanitizeAttribute(value: String): String = value
         .replace("&", "&amp;")

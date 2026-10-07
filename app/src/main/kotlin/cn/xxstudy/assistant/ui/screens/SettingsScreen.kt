@@ -159,6 +159,8 @@ fun SettingsScreen(
     val isSpeaking by speechManager.isSpeaking.collectAsState()
     val isBilingualTts by speechManager.isBilingualTts.collectAsState()
     val ttsNumSpeakers by speechManager.ttsNumSpeakers.collectAsState()
+    val historyReady = mainViewModel?.historyReady?.collectAsState()?.value ?: true
+    val historyNotice = mainViewModel?.historyNotice?.collectAsState()?.value
 
     // Dialog 状态控制
     var showModelSelectDialog by remember { mutableStateOf(false) }
@@ -1150,20 +1152,13 @@ fun SettingsScreen(
                 SettingItemRow(
                     icon = Icons.Default.Security,
                     iconBgColor = Color(0xFF4CAF50),
-                    title = "局域网微服务 (OpenAI API)",
-                    subtitle = "对外开放 0.0.0.0:8989 端口，允许局域网设备调用",
+                    title = "外部推理接口（升级中）",
+                    subtitle = cn.xxstudy.assistant.security.CommercialSafetyPolicy.externalApiStatus,
                     trailing = {
                         Switch(
-                            checked = localServerEnabled,
-                            onCheckedChange = {
-                                triggerHaptic()
-                                AppSettings.setLocalServerEnabled(it)
-                                Toast.makeText(
-                                    context,
-                                    if (it) "微服务已开启: 0.0.0.0:8989" else "微服务已停止",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
+                            checked = localServerEnabled && cn.xxstudy.assistant.security.CommercialSafetyPolicy.externalApiAvailable,
+                            enabled = cn.xxstudy.assistant.security.CommercialSafetyPolicy.externalApiAvailable,
+                            onCheckedChange = { }
                         )
                     }
                 )
@@ -1577,13 +1572,15 @@ fun SettingsScreen(
                     icon = Icons.Default.Delete,
                     iconBgColor = Color(0xFFF44336),
                     title = "清空当前会话历史",
-                    subtitle = "重置大模型上下文记忆，开启新对话",
+                    subtitle = historyNotice ?: "删除本地会话记录并重置模型记忆，不删除知识库",
                     trailing = {
                         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
                     },
                     onClick = {
-                        triggerHaptic()
-                        showClearConfirmDialog = true
+                        if (historyReady) {
+                            triggerHaptic()
+                            showClearConfirmDialog = true
+                        }
                     }
                 )
 
@@ -2068,9 +2065,9 @@ fun SettingsScreen(
             icon = {
                 Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
             },
-            title = { Text("清空会话上下文？", fontWeight = FontWeight.Bold) },
+            title = { Text("删除本地会话历史？", fontWeight = FontWeight.Bold) },
             text = {
-                Text("此操作将重置大模型的对话历史，开启全新上下文记忆。历史交互数据将被完全销毁。", fontSize = 14.sp)
+                Text("将停止当前生成，删除本应用保存的当前会话记录并重置模型记忆。不能在应用内恢复；不会删除知识库或 Obsidian 原始笔记。", fontSize = 14.sp)
             },
             confirmButton = {
                 Button(
@@ -2078,8 +2075,9 @@ fun SettingsScreen(
                         triggerHaptic()
                         onClearChatHistory()
                         showClearConfirmDialog = false
-                        Toast.makeText(context, "已重置本地会话上下文", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "已提交清空请求，请查看会话状态", Toast.LENGTH_SHORT).show()
                     },
+                    enabled = historyReady,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
                     Text("确认清空")
